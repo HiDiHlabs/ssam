@@ -1,7 +1,9 @@
 SSAM
 ============================================================================================
 
-Author: Jeongbin Park (jeongbin.park@charite.de) and Wonyl Choi (wonyl@bu.edu)
+Author: Jeongbin Park (jeongbin.park@charite.de)<sup>1,2,3</sup> and Wonyl Choi (wonyl@bu.edu)<sup>4</sup>
+
+<sup>1</sup>Digital Health Center, Berlin Institute of Health (BIH) and Charite, Berlin, Germany; <sup>2</sup>Faculty of Biosciences, Heidelberg University, Heidelberg, Germany; <sup>3</sup>Division of Theoretical Bioinformatics, German Cancer Research Center (DKFZ), Heidelberg, Germany; <sup>4</sup>Department of Computer Science, Boston University, Boston, the United States of America
 
 This project was done under supervision of Prof. Roland Eils (roland.eils@charite.de),
 and in collaboration with the Human Cell Atlas project.
