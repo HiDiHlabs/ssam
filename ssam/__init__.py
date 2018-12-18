@@ -10,11 +10,17 @@ from functools import reduce
 from sklearn.neighbors.kde import KernelDensity
 from sklearn.preprocessing import normalize
 from scipy import ndimage
+from sklearn.decomposition import PCA
 #from scipy.stats import pearsonr
 from tempfile import mkdtemp
-from utils import corr, calc_ctmap
+from sklearn.neighbors import kneighbors_graph
+from sklearn.cluster import KMeans
+import community
+import networkx as nx
+import sparse
+from .utils import corr, calc_ctmap, calc_corrmap
 
-class SSAMDataset:
+class SSAMDataset(object):
     def __init__(self, genes, positions, width, height, depth=1):
         """
         SSAMDataset(genes, positions, width, height, depth = 1, ncores = -1, save_dir = "", verbose = False)
@@ -43,26 +49,26 @@ class SSAMDataset:
         """
         if depth < 1 or width < 1 or height < 1:
             raise ValueError
-        self.dataset.width = width
-        self.dataset.height = height
-        self.dataset.depth = depth
-        self.dataset.genes = list(genes)
+        self.width = width
+        self.height = height
+        self.depth = depth
+        self.genes = list(genes)
         self.positions = list(positions)
-        self.dataset.is3d = depth > 1
+        self.is3d = depth > 1
         self.vf = None
         self.__vf_norm = None
         self.corr_map = None
 
-        @property
-        def vf_norm(self):
-            if self.vf is None:
-                return None
-            if self.__vf_norm is None:
-                self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
-            return self.__vf_norm
+    @property
+    def vf_norm(self):
+        if self.vf is None:
+            return None
+        if self.__vf_norm is None:
+            self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
+        return self.__vf_norm
 
 
-class SSAMAnalysis:
+class SSAMAnalysis(object):
     def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
         """
         SSAMAnalysis(ncores = -1, save_dir = "", verbose = False)
@@ -135,7 +141,10 @@ class SSAMAnalysis:
             )
         total_steps = np.prod(steps)
         vf_shape = tuple(steps + [len(self.dataset.genes), ])
-        vf_filename = os.path.join(self.save_dir, 'vf')
+        vf_filename = os.path.join(self.save_dir, 'vf_sd%s_bw%s'%(
+            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+            ('%f' % bandwidth).rstrip('0').rstrip('.')
+        ))
         if (use_mmap and not os.path.exists(vf_filename + '.dat')) or \
                 (not use_mmap and not os.path.exists(vf_filename + '.npy') and not os.path.exists(vf_filename + '.dat')):
             # If VF file doesn't exist, then run KDE
@@ -143,7 +152,7 @@ class SSAMAnalysis:
                 vf = np.memmap(vf_filename + '.dat.tmp', dtype='double', mode='w+', shape=vf_shape)
             else:
                 vf = np.zeros(vf_shape)
-            chunksize = min(np.ceil(total_steps / self.ncores), 100000)
+            chunksize = min(int(np.ceil(total_steps / self.ncores)), 100000)
             def yield_chunk():
                 chunk = np.zeros(shape=[chunksize, len(steps)], dtype=int)
                 cnt = 0
@@ -192,10 +201,10 @@ class SSAMAnalysis:
                     pdf = np.load(pdf_filename)
                 else:
                     self.__m__("Running KDE for %s..."%gene_name)
+                    pdf = np.zeros(shape=vf_shape[:-1])
+                    kde = KernelDensity(kernel=kernel, bandwidth=bandwidth).fit(self.dataset.positions[gidx])
                     if pool is None:
                         pool = multiprocessing.Pool(self.ncores)
-                    pdf = np.zeros(shape=vf_shape[:-1])
-                    kde = KernelDensity(kernel=kernel, bandwidth=bandwidth).fit(positions[gidx])
                     for chunks in yield_chunks():
                         pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
                         for pdf_chunk, pos_chunk in zip(pdf_chunks, chunks):
@@ -205,10 +214,9 @@ class SSAMAnalysis:
                                 pdf[pos_chunk[:, 0], pos_chunk[:, 1]] = np.exp(pdf_chunk)
                     pdf /= np.sum(pdf)
                     np.save(pdf_filename, pdf)
-                vf[..., gidx] = pdf * len(positions[gidx])
+                vf[..., gidx] = pdf * len(self.dataset.positions[gidx])
             if use_mmap:
                 vf.flush()
-                vf.close()
                 os.rename(vf_filename + '.dat.tmp', vf_filename + '.dat')
                 vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
             elif self.use_savedir:
@@ -248,32 +256,27 @@ class SSAMAnalysis:
                 This method returns the current object, to make possible to chain methods.
                 e.g. analysis.run_kde().find_localmax()
         """
-        corr_half_size = int(corr_size / 2)
-        if self.dataset.is_3d:
-            corr_dx = np.meshgrid(range(corr_size), range(corr_size), range(corr_size))
+        corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores)
+        self.dataset.corr_map = np.array(corr_map, copy=True)
+        if self.dataset.is3d and corr_map.shape[-1] < 5:
+            selected_z = int(corr_map.shape[-1]/2)
+            self.__m__("Warning: depth of image is very small, only z == %d is considered for finding local maximum vectors."%selected_z)
+            corr_map = corr_map[..., selected_z]
+            max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+            tmp = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
+            tmp[..., selected_z] = max_mask
+            max_mask = tmp
         else:
-            corr_dx = np.meshgrid(range(corr_size), range(corr_size))
-        corr_dx = np.array(list(zip(*[np.ravel(e) - corr_half_size for e in corr_dx])))
-        corr_pos = np.meshgrid(*[range(corr_half_size, e-corr_half_size) for e in self.dataset.vf_norm.shape])
-        corr_map = np.zeros_like(self.dataset.vf_norm)
-        self.dataset.corr_map = corr_map
-        for x in zip(*[np.ravel(e) for e in corr_pos]):
-            avg_corr = 0.0
-            for dx in corr_dx:
-                if all([e == 0 for e in dx]):
-                    continue
-                avg_corr += utils.corr(self.dataset.vf[x], self.dataset.vf[x + dx])
-            corr_map[x] = avg_corr / len(corr_dx)
-        max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+            max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
         max_mask &= self.dataset.vf_norm > min_norm
         local_maxs = np.where(max_mask)
         self.__m__("Found %d local max vectors."%len(local_maxs[0]))
         self.dataset.local_maxs = local_maxs
         return
 
-    def expand_localmax(self, r=0.95, min_pixels=7, max_pixels=1000):
+    def expand_localmax(self, r=0.99, min_pixels=7, max_pixels=1000):
         """
-        expand_localmax(r = 0.95, p = 0.001, min_pixels = 7, max_pixels = 1000)
+        expand_localmax(r = 0.99, p = 0.001, min_pixels = 7, max_pixels = 1000)
             Merge the vectors nearby the local max vectors.
             Only the vectors with the large Pearson correlation values are merged.
 
@@ -294,7 +297,7 @@ class SSAMAnalysis:
         """
         avg_vecs = []
         self.__m__("Expanding local max vectors...")
-        if self.dataset.is_3d:
+        if self.dataset.is3d:
             fill_dx = np.meshgrid(range(3), range(3), range(3))
         else:
             fill_dx = np.meshgrid(range(3), range(3))
@@ -335,7 +338,7 @@ class SSAMAnalysis:
         self.dataset.expanded_mask = mask
         return
 
-    def cluster_vectors(self, method="louvain", **kwargs):
+    def cluster_vectors(self, method="louvain", pca_dims=20, min_cluster_size=10, **kwargs):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
@@ -346,17 +349,18 @@ class SSAMAnalysis:
                 Vectors to cluster, which is 2D N x D matrix (N: number of vectors, D: number of genes).
             method : string
                 Clustring method. Possible values: "louvain", "kmeans"
+            min_cluster_size: int, optional (default: 10)
+                Set minimum cluster size
 
             Other Parameters
             ----------
             resolution: float, optional (default: 0.6)
-                Resolution for Louvain community detection.
-            min_cluster_size: int, optional (default: 10)
-                Set minimum cluster size from Louvain community detection.
+                (For method == "louvain") Resolution for Louvain community detection.
             k : int, optional (default: 50)
-                Initial k value for Kmeans clustering.
+                (For method == "kmeans") Initial k value for Kmeans clustering.
             r : float, optional (default: 0.95)
-                If r < 1.0, then the clusters with a Pearson's correlation coefficienct larger than r are merged.
+                (For method == "kmeans") If r < 1.0, then the clusters with a Pearson's
+                correlation coefficienct larger than r are merged to the same cluster.
 
             Returns
             -------
@@ -365,31 +369,34 @@ class SSAMAnalysis:
                 A centroid of a cluster is calculated by taking average of all vectors in the cluster.
         """
         vecs_normalized = normalize(self.dataset.expanded_vectors, "l1")
+        vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
 
         if method == "louvain":
-            from sklearn.neighbors import kneighbors_graph
-            import community
-            import networkx as nx
-            louvain_resolution = kwargs.get("resolution", 0.6)
-            louvain_resolution = kwargs.get("min_cluster_size", 10)
-            knn_graph = kneighbors_graph(vecs_normalized, 20, mode='connectivity', include_self=False)
+            resoultion = kwargs.get("resolution", 1.0)
+            snn_neighbors = kwargs.get("neighbors", 20)
+            knn_graph = kneighbors_graph(vecs_normalized_dimreduced, min(snn_neighbors, pca_dims), mode='connectivity', include_self=False)
             snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
             G = nx.from_scipy_sparse_matrix(snn_graph)
-            partition = community.best_partition(G, resolution=louvain_resolution)
+            partition = community.best_partition(G, resolution=resoultion)
             lbls = np.array(list(partition.values()))
             low_clusters = []
+            cluster_indices = []
             for lbl in set(lbls):
                 cnt = np.sum(lbls == lbl)
                 if cnt < min_cluster_size:
                     low_clusters.append(lbl)
+                else:
+                    cluster_indices.append(lbls == lbl)
             for lbl in low_clusters:
                 lbls[lbls == lbl] = -1
+            for i, idx in enumerate(cluster_indices):
+                lbls[idx] = i
+
         elif method == "kmeans":
-            from sklearn.cluster import KMeans
             kmeans_k = kwargs.get("k", 50)
             merge_r = kwargs.get("r", 0.95)
-            km = KMeans(n_clusters=kmeans_k).fit(vecs_normalized)
-            lbls = km.labels_[:]
+            km = KMeans(n_clusters=kmeans_k).fit(vecs_normalized_dimreduced)
+            lbls = np.array(km.labels_, copy=True)
 
             centroids = []
             for lbl in set(km.labels_):
@@ -420,11 +427,26 @@ class SSAMAnalysis:
         else:
             raise ValueError("This method is not supported.")
         
+        low_clusters = []
+        cluster_indices = []
+        for lbl in set(lbls):
+            cnt = np.sum(lbls == lbl)
+            if cnt < min_cluster_size:
+                low_clusters.append(lbl)
+            else:
+                cluster_indices.append(lbls == lbl)
+        for lbl in low_clusters:
+            lbls[lbls == lbl] = -1
+        for i, idx in enumerate(cluster_indices):
+            lbls[idx] = i
+            
         centroids = []
         for lbl in set(lbls):
             centroids.append(np.mean(vecs_normalized[lbls == lbl, :], axis=0))
 
+        self.dataset.vectors_normalized = vecs_normalized
         self.dataset.centroids = np.array(centroids)
+        self.dataset.cluster_labels = lbls
         return
 
     def map_celltypes(self, min_r = 0.6):
@@ -443,12 +465,11 @@ class SSAMAnalysis:
             out : numpy.ndarray
                 Returns cell type map.
         """
-        from scipy import sparse
         celltype_maps = []
         for centroid in self.dataset.centroids:
             ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores)
             ctmap[ctmap < min_r] = 0
-            celltype_maps.append(sparse.csr_matrix(ctmap))
+            celltype_maps.append(sparse.COO(np.where(ctmap > min_r), ctmap[ctmap > min_r], shape=ctmap.shape))
         self.dataset.celltype_maps = celltype_maps
         return
 
@@ -480,7 +501,7 @@ if __name__ == "__main__":
     with open("/media/pjb7687/data/ssam_test/test.pickle", "rb") as f:
         selected_genes, pos_dic, width, height, depth = pickle.load(f)
     
-    dataset = SSAMDataset(selected_genes, [pos_dic[gene] for gene in selected_genes] width, height, depth)
+    dataset = SSAMDataset(selected_genes, [pos_dic[gene] for gene in selected_genes], width, height, depth)
     analysis = SSAMAnalysis(dataset, save_dir="/media/pjb7687/data/ssam_test2", verbose=True)
     analysis.run_kde()
     analysis.find_localmax()

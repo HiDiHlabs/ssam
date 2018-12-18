@@ -11,7 +11,11 @@ inline omp_int_t omp_get_max_threads() { return 1;}
 #endif
 
 #include <Python.h>
+#include "numpy/npy_math.h"
 #include "numpy/arrayobject.h"
+
+#define I2D(X, Y, YL) ((X) * (YL) + (Y))
+#define I3D(X, Y, Z, YL, ZL) (((X) * (YL) * (ZL)) + ((Y) * (ZL)) + (Z))
 
 static double __corr__(double *a, double *b, int ngene) {
     double a_mean = 0;
@@ -50,6 +54,176 @@ static double __corr__(double *a, double *b, int ngene) {
     return rtn;
 }
 
+static PyObject *calc_corrmap(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *arg1 = NULL;
+    PyArrayObject *arr1 = NULL;
+    PyArrayObject *oarr = NULL;
+    long x, y, z, nd, ngene = 0;
+    double *vecs, *corrmap;
+    npy_intp *dimsp;
+    int ncores = omp_get_max_threads();
+
+    static char *kwlist[] = { "vf", "ncores", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|i", kwlist, &arg1, &ncores)) return NULL;
+    if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;   
+    nd = PyArray_NDIM(arr1);
+    if (nd != 3 && nd != 4) goto fail; // only 2D or 3D array is expected
+    dimsp = PyArray_DIMS(arr1);
+    oarr = (PyArrayObject*)PyArray_ZEROS(nd - 1, dimsp, NPY_DOUBLE, NPY_CORDER);
+    ngene = dimsp[nd-1];
+    corrmap = (double *)PyArray_DATA(oarr);
+    vecs = (double *)PyArray_DATA(arr1);
+
+    if (nd == 3) {
+        // 2D
+        #pragma omp parallel for collapse(2) num_threads(ncores)
+        for (x=1; x<dimsp[0]-1; x++) {
+            for (y=1; y<dimsp[1]-1; y++) {
+                corrmap[I2D(x, y, dimsp[1])] =
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x+1, y, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x+1, y+1, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x+1, y-1, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x-1, y, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x-1, y+1, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x-1, y-1, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x, y+1, dimsp[1])*ngene, ngene) +
+                    __corr__(vecs + I2D(x, y, dimsp[1])*ngene, vecs + I2D(x, y-1, dimsp[1])*ngene, ngene);
+                corrmap[I2D(x, y, dimsp[1])] /= 8;
+            }
+        }
+        #pragma omp parallel for num_threads(ncores)
+        for (x=0; x<dimsp[0]; x++) {
+            corrmap[I2D(x, 0, dimsp[1])] = NPY_NAN;
+            corrmap[I2D(x, dimsp[1]-1, dimsp[1])] = NPY_NAN;
+        }
+        #pragma omp parallel for num_threads(ncores)
+        for (y=0; y<dimsp[1]; y++) {
+            corrmap[I2D(0, y, dimsp[1])] = NPY_NAN;
+            corrmap[I2D(dimsp[0]-1, y, dimsp[1])] = NPY_NAN;
+        }
+    } else {
+        // 3D
+        #pragma omp parallel for collapse(3) num_threads(ncores)
+        for (x=1; x<dimsp[0]-1; x++) {
+            for (y=1; y<dimsp[1]-1; y++) {
+                for (z=1; z<dimsp[2]-1; z++) {
+                    corrmap[I3D(x, y, z, dimsp[1], dimsp[2])] =
+                        __corr__(vecs + I3D(x,   y,   z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y,   z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x,   y,   z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y+1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x,   y,   z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y-1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x,   y,   z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y,   z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x,   y,   z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y+1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y-1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y  , z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y+1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x+1, y-1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y  , z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y+1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y-1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y+1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y-1, z  , dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y  , z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y+1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y-1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y+1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y-1, z-1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y  , z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y+1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x-1, y-1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y+1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y-1, z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y  , z+1, dimsp[1], dimsp[2])*ngene, ngene) +
+                        __corr__(vecs + I3D(x  , y  , z  , dimsp[1], dimsp[2])*ngene,
+                                 vecs + I3D(x  , y  , z-1, dimsp[1], dimsp[2])*ngene, ngene);
+                    corrmap[I3D(x, y, z, dimsp[1], dimsp[2])] /= 26;
+                }
+            }
+        }
+        #pragma omp parallel for num_threads(ncores)
+        for (x=1; x<dimsp[0]-1; x++) {
+            corrmap[I3D(x, 0         , 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(x, dimsp[1]-1, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(x, 0         , dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(x, dimsp[1]-1, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+        }
+        #pragma omp parallel for num_threads(ncores)
+        for (y=1; y<dimsp[1]-1; y++) {
+            corrmap[I3D(0         , y, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(dimsp[0]-1, y, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(0         , y, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(dimsp[0]-1, y, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+        }
+        #pragma omp parallel for num_threads(ncores)
+        for (z=1; z<dimsp[2]-1; z++) {
+            corrmap[I3D(0         , 0         , z, dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(0         , dimsp[1]-1, z, dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(dimsp[0]-1, 0         , z, dimsp[1], dimsp[2])] = NPY_NAN;
+            corrmap[I3D(dimsp[0]-1, dimsp[1]-1, z, dimsp[1], dimsp[2])] = NPY_NAN;
+        }
+        #pragma omp parallel for collapse(2) num_threads(ncores)
+        for (x=1; x<dimsp[0]-1; x++) {
+            for (y=1; y<dimsp[1]-1; y++) {
+                corrmap[I3D(x, y, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+                corrmap[I3D(x, y, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+            }
+        }
+        #pragma omp parallel for collapse(2) num_threads(ncores)
+        for (x=1; x<dimsp[0]-1; x++) {
+            for (z=1; z<dimsp[2]-1; z++) {
+                corrmap[I3D(x, 0         , z, dimsp[1], dimsp[2])] = NPY_NAN;
+                corrmap[I3D(x, dimsp[1]-1, z, dimsp[1], dimsp[2])] = NPY_NAN;
+            }
+        }
+        #pragma omp parallel for collapse(2) num_threads(ncores)
+        for (y=1; y<dimsp[1]-1; y++) {
+            for (z=1; z<dimsp[2]-1; z++) {
+                corrmap[I3D(0         , y, z, dimsp[1], dimsp[2])] = NPY_NAN;
+                corrmap[I3D(dimsp[0]-1, y, z, dimsp[1], dimsp[2])] = NPY_NAN;
+            }
+        }
+        corrmap[I3D(0         , 0         , 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(0         , 0         , dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(0         , dimsp[1]-1, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(0         , dimsp[1]-1, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(dimsp[0]-1, 0         , 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(dimsp[0]-1, 0         , dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(dimsp[0]-1, dimsp[1]-1, 0         , dimsp[1], dimsp[2])] = NPY_NAN;
+        corrmap[I3D(dimsp[0]-1, dimsp[1]-1, dimsp[2]-1, dimsp[1], dimsp[2])] = NPY_NAN;
+    }
+    Py_DECREF(arr1);
+
+    return (PyObject *) oarr;
+ fail:
+    Py_XDECREF(arr1);
+    return NULL;
+}
+
+
 static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *arg1 = NULL;
     PyObject *arg2 = NULL;
@@ -61,8 +235,6 @@ static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     npy_intp *dimsp;
     int ncores = omp_get_max_threads();
     int i;
-
-    printf("max threads: %d\n", ncores);
 
     static char *kwlist[] = { "vec", "vf", "ncores", NULL };
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|i", kwlist, &arg1, &arg2, &ncores)) return NULL;
@@ -83,12 +255,10 @@ static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     cent = (double *)PyArray_DATA(arr1);
     vecs = (double *)PyArray_DATA(arr2);
 
-    printf("Running loop...\n");
     #pragma omp parallel for num_threads(ncores)
     for (i=0; i<nvec; i++) {
         scores[i] = __corr__(cent, vecs + (i*ngene), ngene);
     }
-    printf("Done\n");
 
     Py_DECREF(arr1);
     Py_DECREF(arr2);
@@ -135,6 +305,7 @@ static PyObject *corr(PyObject *self, PyObject *args) {
 static struct PyMethodDef module_methods[] = {
     {"corr", (PyCFunction)corr, METH_VARARGS, "Calculates Pearson's correlation coefficient."},
     {"calc_ctmap", (PyCFunction)calc_ctmap, METH_VARARGS | METH_KEYWORDS, "Creates a cell type map."},
+    {"calc_corrmap", (PyCFunction)calc_corrmap, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
     {NULL, NULL, 0, NULL}
 };
 
