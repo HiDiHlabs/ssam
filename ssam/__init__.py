@@ -47,6 +47,7 @@ class SSAMDataset(object):
             vf_norm : numpy.ndarray
                 L1 norm of the vector field.
         """
+        
         if depth < 1 or width < 1 or height < 1:
             raise ValueError
         self.width = width
@@ -55,10 +56,21 @@ class SSAMDataset(object):
         self.genes = list(genes)
         self.positions = list(positions)
         self.is3d = depth > 1
-        self.vf = None
+        self.__vf = None
         self.__vf_norm = None
-        self.corr_map = None
+        self.__vectors_normalized = None
+        self.expanded_vectors = None
+        #self.corr_map = None
 
+    @property
+    def vf(self):
+        return self.__vf
+    
+    @vf.setter
+    def vf(self, vf):
+        self.__vf = vf
+        self.__vf_norm = None
+        
     @property
     def vf_norm(self):
         if self.vf is None:
@@ -67,6 +79,14 @@ class SSAMDataset(object):
             self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
         return self.__vf_norm
 
+    @property
+    def vectors_normalized(self):
+        if self.expanded_vectors is None:
+            return None
+        if __vectors_normalized is None:
+            self.__vectors_normalized = normalize(self.expanded_vectors, "l1")
+        return self.__vectors_normalized
+    
 
 class SSAMAnalysis(object):
     def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
@@ -87,6 +107,7 @@ class SSAMAnalysis(object):
             verbose : bool, optional
                 If True, then it prints out messages during the analysis.
         """
+        
         self.dataset = dataset
         if not ncores > 0:
             ncores += multiprocessing.cpu_count()
@@ -125,12 +146,8 @@ class SSAMAnalysis(object):
             use_mmap : bool, optional
                 Use MMAP to reduce memory usage during analysis.
                 Turning off this option significantly increases analysis speed, but can use tremendous amount of memory.
-
-            Returns
-            -------
-            out : numpy.ndarray
-                The vector field.
         """
+        
         steps = [
             int(np.ceil(self.dataset.width / sampling_distance)),
             int(np.ceil(self.dataset.height / sampling_distance)),
@@ -234,10 +251,26 @@ class SSAMAnalysis(object):
         self.dataset.vf = vf
         return
 
-    def find_localmax(self, corr_size=3, search_size=20, min_norm=0):
+    def calc_correlation_map(self, corr_size=3):
+        """
+        calc_correlation_map(corr_size = 3)
+            Find local calculation map of the vector field.
+
+            Parameters
+            ----------
+            corr_size : int, optional
+                Size of square (or cube) that is used to compute the local correlation values.
+                This value should be an odd number.
+        """
+        
+        corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores, size=int(corr_size/2))
+        self.dataset.corr_map = np.array(corr_map, copy=True)
+        return
+    
+    def find_localmax(self, search_size=20, min_norm=0):
         """
         find_localmax(search_size = 20, min_norm = 0)
-            Find location of local maximum vectors in the correlation map of the vector field.
+            Find location of local maximum vectors in the L1 norm of the vector field.
 
             Parameters
             ----------
@@ -249,25 +282,21 @@ class SSAMAnalysis(object):
                 This value should be an odd number.
             min_norm : float, optional
                 Minimum value of L1 norm of the local maximum.
-            
-            Returns
-            -------
-            out : self
-                This method returns the current object, to make possible to chain methods.
-                e.g. analysis.run_kde().find_localmax()
         """
-        corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores)
-        self.dataset.corr_map = np.array(corr_map, copy=True)
-        if self.dataset.is3d and corr_map.shape[-1] < 5:
-            selected_z = int(corr_map.shape[-1]/2)
-            self.__m__("Warning: depth of image is very small, only z == %d is considered for finding local maximum vectors."%selected_z)
-            corr_map = corr_map[..., selected_z]
-            max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
-            tmp = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
-            tmp[..., selected_z] = max_mask
-            max_mask = tmp
-        else:
-            max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+        
+        #corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores, size=int(corr_size/2))
+        #self.dataset.corr_map = np.array(corr_map, copy=True)
+        #if self.dataset.is3d and corr_map.shape[-1] < 5:
+        #    selected_z = int(corr_map.shape[-1]/2)
+        #    self.__m__("Warning: depth of image is very small, only z == %d is considered for finding local maximum vectors."%selected_z)
+        #    corr_map = corr_map[..., selected_z]
+        #    max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+        #    tmp = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
+        #    tmp[..., selected_z] = max_mask
+        #    max_mask = tmp
+        #else:
+        #    max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+        max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
         max_mask &= self.dataset.vf_norm > min_norm
         local_maxs = np.where(max_mask)
         self.__m__("Found %d local max vectors."%len(local_maxs[0]))
@@ -288,13 +317,8 @@ class SSAMAnalysis(object):
                 Minimum number of pixels to merge.
             max_pixels : float, optional
                 Maximum number of pixels to merge.
-            
-            Returns
-            -------
-            out : self
-                This method returns the current object, to make possible to chain methods.
-                e.g. analysis.find_localmax().expand_localmax()
         """
+        
         avg_vecs = []
         self.__m__("Expanding local max vectors...")
         if self.dataset.is3d:
@@ -328,8 +352,8 @@ class SSAMAnalysis(object):
         nlocalmaxs = len(self.dataset.local_maxs[0])
         for cnt, idx in enumerate(range(nlocalmaxs), start=1):
             filled_pos = tuple(zip(*flood_fill(tuple(i[idx] for i in self.dataset.local_maxs))))
-            mask[filled_pos] = 1
             if len(filled_pos) > 0:
+                mask[filled_pos] = 1
                 avg_vecs.append(np.mean(self.dataset.vf[filled_pos], axis=0))
             if cnt % 100 == 0:
                 self.__m__("Processed %d/%d..."%(cnt, nlocalmaxs))
@@ -338,7 +362,7 @@ class SSAMAnalysis(object):
         self.dataset.expanded_mask = mask
         return
 
-    def cluster_vectors(self, method="louvain", pca_dims=20, min_cluster_size=10, **kwargs):
+    def cluster_vectors(self, pca_dims=20, min_cluster_size=10, resolution=1.0, snn_neighbors=20):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
@@ -347,41 +371,24 @@ class SSAMAnalysis(object):
             ----------
             vecs : numpy.ndarray
                 Vectors to cluster, which is 2D N x D matrix (N: number of vectors, D: number of genes).
-            method : string
-                Clustring method. Possible values: "louvain", "kmeans"
             min_cluster_size: int, optional (default: 10)
                 Set minimum cluster size
-
-            Other Parameters
-            ----------
             resolution: float, optional (default: 0.6)
-                (For method == "louvain") Resolution for Louvain community detection.
-            k : int, optional (default: 50)
-                (For method == "kmeans") Initial k value for Kmeans clustering.
-            r : float, optional (default: 0.95)
-                (For method == "kmeans") If r < 1.0, then the clusters with a Pearson's
-                correlation coefficienct larger than r are merged to the same cluster.
-
-            Returns
-            -------
-            out : numpy.ndarray
-                Numpy array containing centroids.
-                A centroid of a cluster is calculated by taking average of all vectors in the cluster.
+                Resolution for Louvain community detection.
         """
-        vecs_normalized = normalize(self.dataset.expanded_vectors, "l1")
+        
+        vecs_normalized = self.dataset.vectors_normalized
         vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
 
-        if method == "louvain":
-            resoultion = kwargs.get("resolution", 1.0)
-            snn_neighbors = kwargs.get("neighbors", 20)
-            knn_graph = kneighbors_graph(vecs_normalized_dimreduced, min(snn_neighbors, pca_dims), mode='connectivity', include_self=False)
+        def cluster_vecs(vecs):
+            knn_graph = kneighbors_graph(vecs, min(snn_neighbors, vecs.shape[0]) - 1, mode='connectivity', include_self=False)
             snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
             G = nx.from_scipy_sparse_matrix(snn_graph)
-            partition = community.best_partition(G, resolution=resoultion)
+            partition = community.best_partition(G, resolution=resolution)
             lbls = np.array(list(partition.values()))
             low_clusters = []
             cluster_indices = []
-            for lbl in set(lbls):
+            for lbl in set(list(lbls)):
                 cnt = np.sum(lbls == lbl)
                 if cnt < min_cluster_size:
                     low_clusters.append(lbl)
@@ -391,65 +398,37 @@ class SSAMAnalysis(object):
                 lbls[lbls == lbl] = -1
             for i, idx in enumerate(cluster_indices):
                 lbls[idx] = i
-
-        elif method == "kmeans":
-            kmeans_k = kwargs.get("k", 50)
-            merge_r = kwargs.get("r", 0.95)
-            km = KMeans(n_clusters=kmeans_k).fit(vecs_normalized_dimreduced)
-            lbls = np.array(km.labels_, copy=True)
-
-            centroids = []
-            for lbl in set(km.labels_):
-                centroids.append(np.mean(vecs_normalized[km.labels_ == lbl, :], axis=0))
-
-            if merge_r < 1.0:
-                merge_ref = []
-                for i in range(len(centroids)):
-                    for j in range(i+1, len(centroids)):
-                        pr = corr(centroids[i], centroids[j])
-                        if pr > merge_r:
-                            appended = False
-                            for mr in merge_ref:
-                                if i in mr:
-                                    mr.append(j)
-                                    appended = True
-                                elif j in mr:
-                                    mr.append(i)
-                                    appended = True
-                                if appended == True:
-                                    break
-                            if not appended:
-                                merge_ref.append([i, j])
-
-                for mr in merge_ref:
-                    for cidx in mr[1:]:
-                        lbls[lbls == cidx] = mr[0]
-        else:
-            raise ValueError("This method is not supported.")
+            return lbls
         
-        low_clusters = []
-        cluster_indices = []
-        for lbl in set(lbls):
-            cnt = np.sum(lbls == lbl)
-            if cnt < min_cluster_size:
-                low_clusters.append(lbl)
-            else:
-                cluster_indices.append(lbls == lbl)
-        for lbl in low_clusters:
-            lbls[lbls == lbl] = -1
-        for i, idx in enumerate(cluster_indices):
-            lbls[idx] = i
-            
+        all_lbls = cluster_vecs(vecs_normalized_dimreduced)
+        #super_lbls = cluster_vecs(vecs_normalized_dimreduced)
+        #for super_lbl in set(list(super_lbls)):
+        #    print(super_lbl, np.sum(super_lbls == super_lbl))
+        #all_lbls = np.zeros_like(super_lbls)
+        #global_lbl_idx = 0
+        #for super_lbl in set(list(super_lbls)):
+        #    super_lbl_idx = np.where(super_lbls == super_lbl)[0]
+        #    if super_lbl == -1:
+        #        all_lbls[super_lbl_idx] = -1
+        #        continue
+        #    sub_lbls = cluster_vecs(vecs_normalized_dimreduced[super_lbl_idx])
+        #    for sub_lbl in set(list(sub_lbls)):
+        #        if sub_lbl == -1:
+        #            all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
+        #        continue
+        #        all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
+        #        global_lbl_idx += 1
+        
         centroids = []
-        for lbl in set(lbls):
-            centroids.append(np.mean(vecs_normalized[lbls == lbl, :], axis=0))
-
-        self.dataset.vectors_normalized = vecs_normalized
+        for lbl in sorted(list(set(all_lbls))):
+            if lbl == -1:
+                continue
+            centroids.append(np.mean(vecs_normalized[all_lbls == lbl, :], axis=0))
         self.dataset.centroids = np.array(centroids)
-        self.dataset.cluster_labels = lbls
+        self.dataset.cluster_labels = all_lbls
         return
 
-    def map_celltypes(self, min_r = 0.6):
+    def map_celltypes(self, min_r = 0.6, centroids=None):
         """
         map_celltypes()
             Create correlation maps between the centroids and the vector field.
@@ -459,12 +438,8 @@ class SSAMAnalysis(object):
             ----------
             min_r : float
                 Threshold for mimimum Pearson's correlation coefficient between the centroids and the vector field.
-
-            Returns
-            -------
-            out : numpy.ndarray
-                Returns cell type map.
         """
+        
         celltype_maps = []
         for centroid in self.dataset.centroids:
             ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores)
@@ -483,12 +458,8 @@ class SSAMAnalysis(object):
             pos_dic : dict(string: numpy.ndarray)
                 Position of the mRNAs in um, given as a dictionary.
                 Value is ndarray, (# of rows) = (number of mRNAs), (# of cols) = (# of dimension). Key is the gene name.
-
-            Returns
-            -------
-            out : list
-                List of the cell type maps.
         """
+        
         self.run_kde()
         self.find_localmax()
         self.expand_localmax()

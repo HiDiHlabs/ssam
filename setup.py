@@ -4,6 +4,7 @@ try:
     import numpy as np
 except ImportError:
     print("Please install Numpy first. e.g. pip install numpy")
+from glob import glob
 
 module_utils = setuptools.extension.Extension('ssam.utils', sources=["c/utils.c"], extra_compile_args=["-fopenmp"], extra_link_args=["-fopenmp"], include_dirs=[np.get_include()])
 
@@ -20,6 +21,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/eilslabs/ssam",
     packages=setuptools.find_packages(),
+    data_files=[("ssam/multivol", glob("vispy-multivol/multivol/*.py"))],
     classifiers=[
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
