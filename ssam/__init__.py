@@ -9,6 +9,7 @@ sns.set_style("whitegrid", {'axes.grid' : False})
 from functools import reduce
 from sklearn.neighbors.kde import KernelDensity
 from sklearn.preprocessing import normalize
+import scipy
 from scipy import ndimage
 from sklearn.decomposition import PCA
 #from scipy.stats import pearsonr
@@ -18,7 +19,10 @@ from sklearn.cluster import KMeans
 import community
 import networkx as nx
 import sparse
-from .utils import corr, calc_ctmap, calc_corrmap
+from skimage import filters
+from skimage.morphology import disk
+from skimage import measure
+from .utils import corr, calc_ctmap, calc_corrmap, flood_fill
 
 class SSAMDataset(object):
     def __init__(self, genes, positions, width, height, depth=1):
@@ -58,9 +62,10 @@ class SSAMDataset(object):
         self.is3d = depth > 1
         self.__vf = None
         self.__vf_norm = None
-        self.__vectors_normalized = None
+        self.normalized_vectors = None
         self.expanded_vectors = None
         #self.corr_map = None
+        self.tsne = None
 
     @property
     def vf(self):
@@ -69,7 +74,7 @@ class SSAMDataset(object):
     @vf.setter
     def vf(self, vf):
         self.__vf = vf
-        self.__vf_norm = None
+        self.__vf_norm = None    
         
     @property
     def vf_norm(self):
@@ -78,15 +83,21 @@ class SSAMDataset(object):
         if self.__vf_norm is None:
             self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
         return self.__vf_norm
-
-    @property
-    def vectors_normalized(self):
-        if self.expanded_vectors is None:
-            return None
-        if __vectors_normalized is None:
-            self.__vectors_normalized = normalize(self.expanded_vectors, "l1")
-        return self.__vectors_normalized
     
+    def plot_tsne(self, run_tsne=True, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", cmap="jet"):
+        if run_tsne:
+            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric).fit_transform(self.normalized_vectors[self.cluster_labels != -1, :])
+        plt.scatter(self.tsne[:, 0], self.tsne[:, 1], c=self.cluster_labels[self.cluster_labels != -1], cmap=cmap)
+        return
+    
+    def plot_expanded_mask(self):
+        plt.imshow(self.expanded_mask, vmin=0, vmax=1)
+        return
+    
+    def plot_correlation_map(self):
+        plt.imshow(ds.corr_map, vmin=0.995, vmax=1.0)
+        plt.colorbar()
+        return
 
 class SSAMAnalysis(object):
     def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
@@ -254,7 +265,7 @@ class SSAMAnalysis(object):
     def calc_correlation_map(self, corr_size=3):
         """
         calc_correlation_map(corr_size = 3)
-            Find local calculation map of the vector field.
+            Calculate local correlation map of the vector field.
 
             Parameters
             ----------
@@ -319,7 +330,7 @@ class SSAMAnalysis(object):
                 Maximum number of pixels to merge.
         """
         
-        avg_vecs = []
+        expanded_vecs = []
         self.__m__("Expanding local max vectors...")
         if self.dataset.is3d:
             fill_dx = np.meshgrid(range(3), range(3), range(3))
@@ -327,64 +338,96 @@ class SSAMAnalysis(object):
             fill_dx = np.meshgrid(range(3), range(3))
         fill_dx = np.array(list(zip(*[np.ravel(e) - 1 for e in fill_dx])))
         mask = np.zeros(self.dataset.vf.shape[:-1]) # TODO: sparse?
-        def flood_fill(pos):
-            refvec = self.dataset.vf[pos]
-            filled_poslist = []
-            def inner_flood_fill(_pos):
-                if len(filled_poslist) > max_pixels:
-                    return
-                if any([p < 0 or p >= self.dataset.vf.shape[i] for i, p in enumerate(_pos)]) or _pos in filled_poslist:
-                    return
-                if corr(self.dataset.vf[_pos], refvec) > r:
-                    filled_poslist.append(_pos)
-                else:
-                    return
-                for dx in fill_dx:
-                    if all([e == 0 for e in dx]):
-                        continue
-                    inner_flood_fill(tuple(np.array(_pos) + dx))
-            inner_flood_fill(pos)
-            if len(filled_poslist) < min_pixels or len(filled_poslist) > max_pixels:
-                return ()
-            else:
-                return filled_poslist
-
         nlocalmaxs = len(self.dataset.local_maxs[0])
+        valid_pos_list = []
         for cnt, idx in enumerate(range(nlocalmaxs), start=1):
-            filled_pos = tuple(zip(*flood_fill(tuple(i[idx] for i in self.dataset.local_maxs))))
+            local_pos = tuple(i[idx] for i in self.dataset.local_maxs)
+            filled_pos = tuple(zip(*flood_fill(local_pos, self.dataset.vf, r, min_pixels, max_pixels)))
             if len(filled_pos) > 0:
                 mask[filled_pos] = 1
-                avg_vecs.append(np.mean(self.dataset.vf[filled_pos], axis=0))
+                valid_pos_list.append(local_pos)
+                expanded_vecs.append(np.sum(self.dataset.vf[filled_pos], axis=0))
             if cnt % 100 == 0:
                 self.__m__("Processed %d/%d..."%(cnt, nlocalmaxs))
         self.__m__("Processed %d/%d..."%(cnt, nlocalmaxs))
-        self.dataset.expanded_vectors = np.array(avg_vecs)
+        self.dataset.expanded_vectors = np.array(expanded_vecs)
         self.dataset.expanded_mask = mask
+        self.dataset.valid_local_maxs = valid_pos_list
         return
-
-    def cluster_vectors(self, pca_dims=20, min_cluster_size=10, resolution=1.0, snn_neighbors=20):
+    
+    def normalize_vectors(self, norm="l1", use_expanded_vectors=False, normalize_gene=True, normalize_vector=True):
+        """
+        nomalize_vectors(norm = "l1", use_expanded_vectors = False, normalize_gene = True, normalize_vector = True)
+            Normalize vectors using scipy.preprocessing.normalization
+            
+            Parameters
+            ----------
+            norm : string (default: "l1")
+                Type of norm for normalization. 
+            use_expanded_vectors : bool (default: False)
+                If True, use averaged vectors nearby local maxima of the vector field.
+            normalize_gene: bool (default: True)
+                If True, normalize vectors by sum of each gene expression across all vectors.
+            normalize_vector: bool (default: True)
+                If True, normalize vectors by sum of all gene expression of each vector.
+        """
+        if use_expanded_vectors:
+            vec = np.array(self.dataset.expanded_vectors, copy=True)
+        else:
+            vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
+        if normalize_gene:
+            vec = normalize(vec, norm=norm, axis=0) * vec.shape[1] # Normalize per gene
+        if normalize_vector:
+            vec = normalize(vec, norm=norm, axis=1) * vec.shape[0] # Normalize per vector
+        self.dataset.normalized_vectors = vec
+        return
+    
+    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, seed=-1, log_transform=False):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
 
             Parameters
             ----------
-            vecs : numpy.ndarray
-                Vectors to cluster, which is 2D N x D matrix (N: number of vectors, D: number of genes).
-            min_cluster_size: int, optional (default: 10)
-                Set minimum cluster size
-            resolution: float, optional (default: 0.6)
+            pca_dims : int (default: 10)
+                Number of principal componants used for clustering.
+            min_cluster_size: int, optional (default: 0)
+                Set minimum cluster size.
+            resolution: float, optional (default: 1.0)
                 Resolution for Louvain community detection.
+            prune: float, optional (default: 1.0/15.0)
+                Threshold for Jaccard index (weight of SNN network). If it is smaller than prune, it is set to zero.
+            snn_neighbors: int, optional (default: 30)
+                Number of neighbors for SNN network.
+            metric: string, optional (default: "euclidean")
+                Metric for calculation of distance between vectors in gene expression space.
+            subclustering: bool, optional (default: False)
+                If True, each cluster will be clustered once again with the same method to find more subclusters.
+            seed: int, optional (default: -1)
+                Random seed for replication (TODO: at the moment it is not working).
+            log_transform: bool, optional (default: False)
+                if True, clustering will be done after taking log(x+1) of the vectors. The cluster centroids and medoids will be restored back with exp(x)-1.
         """
         
-        vecs_normalized = self.dataset.vectors_normalized
+        vecs_normalized = self.dataset.normalized_vectors
+        if log_transform:
+            vecs_normalized = np.log1p(vecs_normalized)
         vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
 
         def cluster_vecs(vecs):
-            knn_graph = kneighbors_graph(vecs, min(snn_neighbors, vecs.shape[0]) - 1, mode='connectivity', include_self=False)
-            snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
-            G = nx.from_scipy_sparse_matrix(snn_graph)
-            partition = community.best_partition(G, resolution=resolution)
+            k = min(snn_neighbors, vecs.shape[0])
+            knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
+            #snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
+            intersections = np.dot(knn_graph, knn_graph.T)
+            #unions = np.zeros_like(intersections)
+            #for i in range(knn_graph.shape[0]):
+            #    for j in range(knn_graph.shape[1]):
+            #        unions[i, j] = np.sum(np.logical_or(knn_graph[i, :], knn_graph[j, :]))
+            #snn_graph = intersections / unions
+            snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
+            snn_graph[snn_graph < prune] = 0
+            G = nx.from_numpy_matrix(snn_graph)
+            partition = community.best_partition(G, resolution=resolution, randomize=True)
             lbls = np.array(list(partition.values()))
             low_clusters = []
             cluster_indices = []
@@ -400,69 +443,118 @@ class SSAMAnalysis(object):
                 lbls[idx] = i
             return lbls
         
-        all_lbls = cluster_vecs(vecs_normalized_dimreduced)
-        #super_lbls = cluster_vecs(vecs_normalized_dimreduced)
-        #for super_lbl in set(list(super_lbls)):
-        #    print(super_lbl, np.sum(super_lbls == super_lbl))
-        #all_lbls = np.zeros_like(super_lbls)
-        #global_lbl_idx = 0
-        #for super_lbl in set(list(super_lbls)):
-        #    super_lbl_idx = np.where(super_lbls == super_lbl)[0]
-        #    if super_lbl == -1:
-        #        all_lbls[super_lbl_idx] = -1
-        #        continue
-        #    sub_lbls = cluster_vecs(vecs_normalized_dimreduced[super_lbl_idx])
-        #    for sub_lbl in set(list(sub_lbls)):
-        #        if sub_lbl == -1:
-        #            all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
-        #        continue
-        #        all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
-        #        global_lbl_idx += 1
+        if subclustering:
+            super_lbls = cluster_vecs(vecs_normalized_dimreduced)
+            all_lbls = np.zeros_like(super_lbls)
+            global_lbl_idx = 0
+            for super_lbl in set(list(super_lbls)):
+                super_lbl_idx = np.where(super_lbls == super_lbl)[0]
+                if super_lbl == -1:
+                    all_lbls[super_lbl_idx] = -1
+                    continue
+                sub_lbls = cluster_vecs(vecs_normalized_dimreduced[super_lbl_idx])
+                for sub_lbl in set(list(sub_lbls)):
+                    if sub_lbl == -1:
+                        all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
+                        continue
+                    all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
+                    global_lbl_idx += 1
+        else:
+            all_lbls = cluster_vecs(vecs_normalized_dimreduced)
         
         centroids = []
+        medoids = []
         for lbl in sorted(list(set(all_lbls))):
             if lbl == -1:
                 continue
-            centroids.append(np.mean(vecs_normalized[all_lbls == lbl, :], axis=0))
+            cl_vecs = vecs_normalized[all_lbls == lbl, :]
+            if log_transform:
+                cl_vecs = np.log(cl_vecs + 1)
+            cl_dists = scipy.spatial.distance.cdist(cl_vecs, cl_vecs, metric)
+            medoid = cl_vecs[np.argmin(np.sum(cl_dists, axis=0))]
+            centroid = np.mean(cl_vecs, axis=0)
+            if log_transform:
+                medoid = np.exp(medoid) - 1
+                centroid = np.exp(centroid) - 1
+            medoids.append(medoid)
+            centroids.append(centroid)
+            
         self.dataset.centroids = np.array(centroids)
+        self.dataset.medoids = np.array(medoids)
         self.dataset.cluster_labels = all_lbls
         return
 
-    def map_celltypes(self, min_r = 0.6, centroids=None):
+    def map_celltypes(self, centroids=None, min_r=0.6, min_norm="otsu", filter_params={}, min_blob_area=75, log_transform=False):
         """
-        map_celltypes()
+        map_celltypes(centroids = None, min_r = 0.6, log_transform = False)
             Create correlation maps between the centroids and the vector field.
             Each correlation map corresponds each cell type's image map.
 
             Parameters
             ----------
-            min_r : float
+            centroids: np.array(float) or list(np.array(float)), default: None
+                If given, map celltypes with the given cluster centroids.
+                Otherwise, map celltypes with the clusters from the vector field.
+            min_r: float, default: 0.6
                 Threshold for mimimum Pearson's correlation coefficient between the centroids and the vector field.
+            log_transform: bool, default: False
+                If True, the cluster centroids are mapped to vector field after taking log(x+1).
         """
         
         celltype_maps = []
-        for centroid in self.dataset.centroids:
-            ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores)
+        if centroids is None:
+            centroids = self.dataset.centroids
+        for centroid in centroids:
+            if log_transform:
+                ctmap = calc_ctmap(np.log(centroid + 1), np.log(self.dataset.vf + 1), self.ncores)
+            else:
+                ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores)
             ctmap[ctmap < min_r] = 0
-            celltype_maps.append(sparse.COO(np.where(ctmap > min_r), ctmap[ctmap > min_r], shape=ctmap.shape))
+            
+            if isinstance(min_norm, str):
+                if min_norm in ["local", "niblack", "sauvola", "localotsu"]:
+                    im = np.zeros_like(self.dataset.vf_norm)
+                    im[ctmap > min_r] = self.dataset.vf_norm[ctmap > min_r]
+                if min_norm == "localotsu":
+                    max_norm = np.max(im)
+                    im /= max_norm
+                    selem = disk(filter_params['radius'])
+                    min_norm_cut = filters.rank.otsu(im, selem) * max_norm
+                else:
+                    filter_func = getattr(filters, "threshold_" + min_norm)
+                    if min_norm in ["local", "niblack", "sauvola"]:
+                        min_norm_cut = filter_func(im, **filter_params)
+                    else:
+                        highr_norm = self.dataset.vf_norm[ctmap > min_r]
+                        #sigma = np.std(highr_norm)
+                        min_norm_cut = filter_func(highr_norm, **filter_params)
+            else:
+                min_norm_cut = float(min_norm)
+            ctmap[self.dataset.vf_norm < min_norm_cut] = 0
+            if min_blob_area > 0:
+                mask = ctmap > 0
+                blob_labels = measure.label(mask, background=0)
+                for bp in measure.regionprops(blob_labels):
+                    minr, minc, maxr, maxc = bp.bbox
+                    if bp.filled_area < min_blob_area:
+                        mask[minr:maxr, minc:maxc] = 0
+                        continue
+                    if bp.area != bp.filled_area:
+                        mask[minr:maxr, minc:maxc] = bp.filled_image
+            ctmap[~mask] = 0
+            celltype_maps.append(sparse.COO(np.where(ctmap > 0), ctmap[ctmap > 0], shape=ctmap.shape))
         self.dataset.celltype_maps = celltype_maps
         return
 
-    def run_full_analysis(self):
+    def run_full_analysis_with_defaults(self):
         """
-        run_full_analysis()
-            Run all analyses with default parameters.
-
-            Parameters
-            ----------
-            pos_dic : dict(string: numpy.ndarray)
-                Position of the mRNAs in um, given as a dictionary.
-                Value is ndarray, (# of rows) = (number of mRNAs), (# of cols) = (# of dimension). Key is the gene name.
+        run_full_analysis_with_defaults()
+            Run all analyses with the default parameters.
         """
         
         self.run_kde()
         self.find_localmax()
-        self.expand_localmax()
+        self.normalize_vectors()
         self.cluster_vectors()
         self.map_celltypes()
         return

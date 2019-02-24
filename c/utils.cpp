@@ -1,6 +1,8 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <stdio.h>
 #include <math.h>
+#include <queue>
+#include <vector>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -16,6 +18,17 @@ inline omp_int_t omp_get_max_threads() { return 1;}
 
 #define I2D(X, Y, YL) ((X) * (YL) + (Y))
 #define I3D(X, Y, Z, YL, ZL) (((X) * (YL) * (ZL)) + ((Y) * (ZL)) + (Z))
+
+struct pos2d {
+    long x;
+    long y;
+};
+
+struct pos3d {
+    long x;
+    long y;
+    long z;
+};
 
 static double __corr__(double *a, double *b, int ngene) {
     double a_mean = 0;
@@ -52,6 +65,175 @@ static double __corr__(double *a, double *b, int ngene) {
 
     rtn /= ngene;
     return rtn;
+}
+
+static PyObject *flood_fill(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *arg1 = NULL;
+    PyObject *arg2 = NULL;
+    PyObject* filled_poslist = NULL;
+    PyArrayObject *arr1 = NULL;
+    PyArrayObject *arr2 = NULL;
+    long nvec, nd, ngene = 0;
+    long *pos, x, y, z, cnt;
+    double r = 0.6, *vf;
+    npy_intp *dimsp;
+    int min_pixels = 10, max_pixels=2000;
+    int i;
+    bool *mask;
+
+    static char *kwlist[] = { "pos", "vf", "r", "min_pixels", "max_pixels", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|dii", kwlist, &arg1, &arg2, &r, &min_pixels, &max_pixels)) return NULL;
+    if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_LONG, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
+    if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if (PyArray_NDIM(arr1) != 1) goto fail;
+    nd = PyArray_NDIM(arr2);
+    dimsp = PyArray_DIMS(arr2);
+    nvec = 1;
+    for (i=0; i<nd-1; i++)
+        nvec *= dimsp[i];
+    ngene = dimsp[nd-1];
+    filled_poslist = PyList_New(0);
+    pos = (long *)PyArray_DATA(arr1);
+    vf = (double *)PyArray_DATA(arr2);
+    mask = (bool *) calloc(nvec, sizeof(bool));
+    cnt = 0;
+    if (nd == 3) {
+        // 2D
+        std::queue<pos2d> queue2d;
+        queue2d.push(pos2d());
+        queue2d.back().x = pos[0];
+        queue2d.back().y = pos[1];
+        while (queue2d.size() > 0) {
+            x = queue2d.front().x;
+            y = queue2d.front().y;
+            PyObject *t = PyTuple_New(2);
+            PyTuple_SetItem(t, 0, PyLong_FromLong(x));
+            PyTuple_SetItem(t, 1, PyLong_FromLong(y));
+            cnt += 1;
+            if (cnt > max_pixels) 
+                break;
+            PyList_Append(filled_poslist, t);
+            queue2d.pop();
+            if (x < dimsp[0] - 1 && mask[I2D(x + 1, y, dimsp[1])] == false &&
+                    __corr__(vf + (I2D(pos[0], pos[1], dimsp[1]) * ngene),
+                             vf + (I2D(x + 1, y, dimsp[1]) * ngene), ngene) > r) {
+                mask[I2D(x + 1, y, dimsp[1])] = true;
+                queue2d.push(pos2d());
+                queue2d.back().x = x + 1;
+                queue2d.back().y = y;
+            }
+            if (x > 1 && mask[I2D(x - 1, y, dimsp[1])] == false &&
+                    __corr__(vf + (I2D(pos[0], pos[1], dimsp[1]) * ngene),
+                             vf + (I2D(x - 1, y, dimsp[1]) * ngene), ngene) > r) {
+                mask[I2D(x - 1, y, dimsp[1])] = true;
+                queue2d.push(pos2d());
+                queue2d.back().x = x - 1;
+                queue2d.back().y = y;
+            }
+            if (y < dimsp[1] - 1 && mask[I2D(x, y + 1, dimsp[1])] == false &&
+                    __corr__(vf + (I2D(pos[0], pos[1], dimsp[1]) * ngene),
+                             vf + (I2D(x, y + 1, dimsp[1]) * ngene), ngene) > r) {
+                mask[I2D(x, y + 1, dimsp[1])] = true;
+                queue2d.push(pos2d());
+                queue2d.back().x = x;
+                queue2d.back().y = y + 1;
+            }
+            if (y > 1 && mask[I2D(x, y - 1, dimsp[1])] == false &&
+                    __corr__(vf + (I2D(pos[0], pos[1], dimsp[1]) * ngene),
+                             vf + (I2D(x, y - 1, dimsp[1]) * ngene), ngene) > r) {
+                mask[I2D(x, y - 1, dimsp[1])] = true;
+                queue2d.push(pos2d());
+                queue2d.back().x = x;
+                queue2d.back().y = y - 1;
+            }
+        }
+    } else if (nd == 4) {
+        // 3D
+        std::queue<pos3d> queue3d;
+        queue3d.push(pos3d());
+        queue3d.back().x = pos[0];
+        queue3d.back().y = pos[1];
+        queue3d.back().z = pos[2];
+        while (queue3d.size() > 0) {
+            x = queue3d.front().x;
+            y = queue3d.front().y;
+            z = queue3d.front().z;
+            PyObject *t = PyTuple_New(3);
+            PyTuple_SetItem(t, 0, PyLong_FromLong(x));
+            PyTuple_SetItem(t, 1, PyLong_FromLong(y));
+            PyTuple_SetItem(t, 2, PyLong_FromLong(z));
+            PyList_Append(filled_poslist, t);
+            cnt += 1;
+            if (cnt > max_pixels) 
+                break;
+            queue3d.pop();
+            if (x < dimsp[0] - 1 && mask[I3D(x + 1, y, z, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x + 1, y, z, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x + 1, y, z, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x + 1;
+                queue3d.back().y = y;
+                queue3d.back().z = z;
+            }
+            if (x > 1 && mask[I3D(x - 1, y, z, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x - 1, y, z, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x - 1, y, z, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x - 1;
+                queue3d.back().y = y;
+                queue3d.back().z = z;
+            }
+            if (y < dimsp[1] - 1 && mask[I3D(x, y + 1, z, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x, y + 1, z, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x, y + 1, z, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x;
+                queue3d.back().y = y + 1;
+                queue3d.back().z = z;
+            }
+            if (y > 1 && mask[I3D(x, y - 1, z, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x, y - 1, z, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x, y - 1, z, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x;
+                queue3d.back().y = y - 1;
+                queue3d.back().z = z;
+            }
+            if (z < dimsp[2] - 1 && mask[I3D(x, y, z + 1, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x, y, z + 1, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x, y, z, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x;
+                queue3d.back().y = y;
+                queue3d.back().z = z + 1;
+            }
+            if (z > 1 && mask[I3D(x, y, z - 1, dimsp[1], dimsp[2])] == false &&
+                    __corr__(vf + I3D(pos[0], pos[1], pos[2], dimsp[1], dimsp[2]) * ngene,
+                             vf + I3D(x, y, z - 1, dimsp[1], dimsp[2]) * ngene, ngene) > r) {
+                mask[I3D(x, y, z - 1, dimsp[1], dimsp[2])] = true;
+                queue3d.push(pos3d());
+                queue3d.back().x = x;
+                queue3d.back().y = y;
+                queue3d.back().z = z - 1;
+            }
+        }
+    }
+    free((void*)mask);
+    Py_DECREF(arr1);
+    Py_DECREF(arr2);
+    if (cnt > max_pixels || cnt < min_pixels) 
+        PyList_SetSlice(filled_poslist, 0, PyList_Size(filled_poslist), NULL);
+    return (PyObject *) filled_poslist;
+ 
+fail:
+    Py_XDECREF(arr1);
+    Py_XDECREF(arr2);
+    return NULL;
 }
 
 static PyObject *calc_corrmap(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -235,6 +417,7 @@ static struct PyMethodDef module_methods[] = {
     {"corr", (PyCFunction)corr, METH_VARARGS, "Calculates Pearson's correlation coefficient."},
     {"calc_ctmap", (PyCFunction)calc_ctmap, METH_VARARGS | METH_KEYWORDS, "Creates a cell type map."},
     {"calc_corrmap", (PyCFunction)calc_corrmap, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
+    {"flood_fill", (PyCFunction)flood_fill, METH_VARARGS | METH_KEYWORDS, "Performs 3d flood fill based on correlation."},
     {NULL, NULL, 0, NULL}
 };
 

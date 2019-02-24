@@ -6,7 +6,7 @@ except ImportError:
     print("Please install Numpy first. e.g. pip install numpy")
 from glob import glob
 
-module_utils = setuptools.extension.Extension('ssam.utils', sources=["c/utils.c"], extra_compile_args=["-fopenmp"], extra_link_args=["-fopenmp"], include_dirs=[np.get_include()])
+module_utils = setuptools.extension.Extension('ssam.utils', sources=["c/utils.cpp"], extra_compile_args=["-fopenmp"], extra_link_args=["-fopenmp"], include_dirs=[np.get_include()])
 
 with io.open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
