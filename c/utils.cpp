@@ -292,12 +292,6 @@ static PyObject *calc_corrmap(PyObject *self, PyObject *args, PyObject *kwargs) 
         }
     } else {
         // 3D (nd == 4)
-        for (dx=-csize; dx<csize+1; dx++) {
-            for (dy=-csize; dy<csize+1; dy++) {
-                for (dz=-csize; dz<csize+1; dz++) {
-                }
-            }
-        }
         #pragma omp parallel num_threads(ncores) private(tmpvec)
         {
             tmpvec = (double *)calloc(ngene, sizeof(double));
@@ -334,6 +328,83 @@ static PyObject *calc_corrmap(PyObject *self, PyObject *args, PyObject *kwargs) 
     return NULL;
 }
 
+static PyObject *calc_corrmap_2(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *arg1 = NULL;
+    PyArrayObject *arr1 = NULL;
+    PyArrayObject *oarr = NULL;
+    long i, k, x, y, z, dx, dy, dz;
+    long nvec, nd, ngene = 0;
+    double *vecs, *corrmap;
+    npy_intp *dimsp;
+    npy_intp dimsp2[4];
+    int ncores = omp_get_max_threads();
+    int csize = 1;
+
+    static char *kwlist[] = { "vf", "ncores", "size", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", kwlist, &arg1, &ncores, &csize)) return NULL;
+    if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;   
+    nd = PyArray_NDIM(arr1);
+    if (nd != 3 && nd != 4) goto fail; // only 2D or 3D array is expected
+    dimsp = PyArray_DIMS(arr1);
+    for (i=0; i<nd-1; i++)
+        dimsp2[i] = dimsp[i];
+    dimsp2[nd-1] = (csize * 2 + 1) * (csize * 2 + 1) - 1;
+    oarr = (PyArrayObject*)PyArray_ZEROS(nd, dimsp2, NPY_DOUBLE, NPY_CORDER);
+    ngene = dimsp[nd-1];
+    corrmap = (double *)PyArray_DATA(oarr);
+    vecs = (double *)PyArray_DATA(arr1);
+    nvec = 1;
+    for (i=0; i<nd; i++)
+        nvec *= dimsp2[i];
+
+    // initialize corrmap with NANs
+    #pragma omp parallel for num_threads(ncores)
+    for (i=0; i<nvec; i++)
+        corrmap[i] = NPY_NAN;
+
+    if (nd == 3) {
+        // 2D
+        #pragma omp parallel for collapse(2) private(k, dx, dy)
+        for (x=csize; x<dimsp[0]-csize; x++) {
+            for (y=csize; y<dimsp[1]-csize; y++) {
+                k = 0;
+                for (dx=-csize; dx<csize+1; dx++) {
+                    for (dy=-csize; dy<csize+1; dy++) {
+                        if (dx == 0 && dy == 0) continue;
+                        corrmap[I2D(x, y, dimsp2[1])*dimsp2[2] + (k++)] = 
+                            __corr__(vecs + I2D(x, y, dimsp[1])*ngene,
+                                     vecs + I2D(x+dx, y+dy, dimsp[1])*ngene, ngene);
+                    }
+                }
+            }
+        }
+    } else {
+        // 3D
+        #pragma omp parallel for collapse(3) private(k, dx, dy, dz)
+        for (x=csize; x<dimsp[0]-csize; x++) {
+            for (y=csize; y<dimsp[1]-csize; y++) {
+                for (z=csize; z<dimsp[2]-csize; z++) {
+                    k = 0;
+                    for (dx=-csize; dx<csize+1; dx++) {
+                        for (dy=-csize; dy<csize+1; dy++) {
+                            for (dz=-csize; dz<csize+1; dz++) {
+                                if (dx == 0 && dy == 0 && dz == 0) continue;
+                                corrmap[I3D(x, y, z, dimsp2[1], dimsp2[2])*dimsp2[3] + (k++)] =
+                                    __corr__(vecs + I3D(x, y, z, dimsp[1], dimsp[2])*ngene, vecs + I3D(x+dx, y+dy, z+dz, dimsp[1], dimsp[2])*ngene, ngene);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Py_DECREF(arr1);
+
+    return (PyObject *) oarr;
+ fail:
+    Py_XDECREF(arr1);
+    return NULL;
+}
 
 static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *arg1 = NULL;
@@ -417,6 +488,7 @@ static struct PyMethodDef module_methods[] = {
     {"corr", (PyCFunction)corr, METH_VARARGS, "Calculates Pearson's correlation coefficient."},
     {"calc_ctmap", (PyCFunction)calc_ctmap, METH_VARARGS | METH_KEYWORDS, "Creates a cell type map."},
     {"calc_corrmap", (PyCFunction)calc_corrmap, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
+    {"calc_corrmap_2", (PyCFunction)calc_corrmap_2, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
     {"flood_fill", (PyCFunction)flood_fill, METH_VARARGS | METH_KEYWORDS, "Performs 3d flood fill based on correlation."},
     {NULL, NULL, 0, NULL}
 };

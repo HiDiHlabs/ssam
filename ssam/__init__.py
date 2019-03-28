@@ -8,10 +8,12 @@ sns.set()
 sns.set_style("whitegrid", {'axes.grid' : False})
 from functools import reduce
 from sklearn.neighbors.kde import KernelDensity
-from sklearn.preprocessing import normalize
+from sklearn import preprocessing
 import scipy
 from scipy import ndimage
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from umap import UMAP
 #from scipy.stats import pearsonr
 from tempfile import mkdtemp
 from sklearn.neighbors import kneighbors_graph
@@ -22,6 +24,8 @@ import sparse
 from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
+from matplotlib.colors import ListedColormap
+import pickle
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill
 
 class SSAMDataset(object):
@@ -64,8 +68,10 @@ class SSAMDataset(object):
         self.__vf_norm = None
         self.normalized_vectors = None
         self.expanded_vectors = None
+        self.cluster_labels = None
         #self.corr_map = None
         self.tsne = None
+        self.umap = None
 
     @property
     def vf(self):
@@ -84,19 +90,135 @@ class SSAMDataset(object):
             self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
         return self.__vf_norm
     
-    def plot_tsne(self, run_tsne=True, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", cmap="jet"):
-        if run_tsne:
-            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric).fit_transform(self.normalized_vectors[self.cluster_labels != -1, :])
-        plt.scatter(self.tsne[:, 0], self.tsne[:, 1], c=self.cluster_labels[self.cluster_labels != -1], cmap=cmap)
+    def plot_l1norm(self, cmap="viridis", rotate=0):
+        if rotate < 0 or rotate > 3:
+            raise ValueError("rotate can only be 0, 1, 2, 3")
+        im = np.array(self.vf_norm, copy=True)
+        if rotate == 1 or rotate == 3:
+            im = im.T
+        if len(self.vf_norm.shape) == 3:
+            plt.imshow(im[int(self.vf_norm.shape[2] / 2)], cmap=cmap)
+        else:
+            plt.imshow(im, cmap=cmap)
+        if rotate == 1:
+            plt.gca().invert_xaxis()
+        elif rotate == 2:
+            plt.gca().invert_xaxis()
+            plt.gca().invert_yaxis()
+        elif rotate == 3:
+            plt.gca().invert_yaxis()
+
+    def plot_localmax(self, c=None, s=1, rotate=0):
+        if rotate < 0 or rotate > 3:
+            raise ValueError("rotate can only be 0, 1, 2, 3")
+        if rotate == 0 or rotate == 2:
+            dim0, dim1 = 1, 0
+        elif rotate == 1 or rotate == 3:
+            dim0, dim1 = 0, 1
+        plt.scatter(self.local_maxs[dim0], self.local_maxs[dim1], s=s, c=None)
+        plt.xlim([0, self.vf_norm.shape[dim0]])
+        plt.ylim([self.vf_norm.shape[dim1], 0])
+        if rotate == 1:
+            plt.gca().invert_xaxis()
+        elif rotate == 2:
+            plt.gca().invert_xaxis()
+            plt.gca().invert_yaxis()
+        elif rotate == 3:
+            plt.gca().invert_yaxis()    
+        
+    def __run_pca(self, exclude_bad_clusters, pca_dims, log_transform):
+        if exclude_bad_clusters:
+            good_vecs = self.normalized_vectors[self.cluster_labels != -1, :]
+        else:
+            good_vecs = self.normalized_vectors
+        if log_transform:
+            X = np.log(good_vecs + 1)
+        else:
+            X = good_vecs
+        return PCA(n_components=pca_dims).fit_transform(X)
+        
+    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, colors=[], cmap="jet"):
+        if run_tsne or self.tsne is None:
+            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
+            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric).fit_transform(pcs[:, :pca_dims])
+        if self.cluster_labels is not None:
+            if exclude_bad_clusters:
+                cols = self.cluster_labels[self.cluster_labels != -1]
+            else:
+                cols = self.cluster_labels
+        else:
+            cols = None
+        if len(colors) > 0:
+            cmap = ListedColormap(colors)
+        plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
+        return
+
+    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, colors=[], cmap="jet"):
+        if run_umap or self.umap is None:
+            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
+            self.umap = UMAP(metric=metric).fit_transform(pcs[:, :pca_dims])
+        if self.cluster_labels is not None:
+            if exclude_bad_clusters:
+                cols = self.cluster_labels[self.cluster_labels != -1]
+            else:
+                cols = self.cluster_labels
+        else:
+            cols = None
+        if len(colors) > 0:
+            cmap = ListedColormap(colors)
+        plt.scatter(self.umap[:, 0], self.umap[:, 1], s=s, c=cols, cmap=cmap)
+        return
+
+    def plot_expanded_mask(self, cmap='Greys'):
+        plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap)
         return
     
-    def plot_expanded_mask(self):
-        plt.imshow(self.expanded_mask, vmin=0, vmax=1)
-        return
-    
-    def plot_correlation_map(self):
-        plt.imshow(ds.corr_map, vmin=0.995, vmax=1.0)
+    def plot_correlation_map(self, cmap='hot'):
+        plt.imshow(ds.corr_map, vmin=0.995, vmax=1.0, cmap=cmap)
         plt.colorbar()
+        return
+    
+    def plot_celltypes_map(self, output_mask=None, background="black", centroid_indices=[], colors=None, min_r=0.6, min_norm=0.1, rotate=0):
+        if len(centroid_indices) == 0:
+            centroid_indices = range(len(self.celltype_maps))
+
+        if colors is None:
+            cmap = plt.get_cmap('jet')
+            colors = cmap([float(i) / (len(centroid_indices) - 1) for i in range(len(centroid_indices))])
+            
+        all_colors = ["#000000" if not j in centroid_indices else colors[i] for i, j in enumerate(range(len(self.celltype_maps)))]
+        cmap = ListedColormap(all_colors)
+        if rotate == 1 or rotate == 3:
+            max_corr_idx = self.max_corr_idx.T
+            vf_norm = self.vf_norm.T
+            max_corr = self.max_corr.T
+        else:
+            max_corr_idx = self.max_corr_idx
+            vf_norm = self.vf_norm
+            max_corr = self.max_corr
+
+        sctmap = cmap(max_corr_idx)
+        if output_mask is not None:
+            sctmap[~output_mask.astype(bool)] = (0, 0, 0, 0)
+        sctmap[vf_norm < min_norm] = (0, 0, 0, 0)
+        sctmap[max_corr < min_r] = (0, 0, 0, 0)
+        
+        #alpha = max_corr - fade_start
+        #alpha[alpha < 0] = 0
+        #alpha /= np.max(alpha)
+        #sctmap[..., 3] = alpha
+        
+        plt.gca().set_facecolor(background)
+        plt.imshow(sctmap)
+        
+        if rotate == 1:
+            plt.gca().invert_xaxis()
+        elif rotate == 2:
+            plt.gca().invert_xaxis()
+            plt.gca().invert_yaxis()
+        elif rotate == 3:
+            plt.gca().invert_yaxis()
+
         return
 
 class SSAMAnalysis(object):
@@ -158,6 +280,12 @@ class SSAMAnalysis(object):
                 Use MMAP to reduce memory usage during analysis.
                 Turning off this option significantly increases analysis speed, but can use tremendous amount of memory.
         """
+        def save_pickle(fn, o):
+            with open(fn, "wb") as f:
+                return pickle.dump(o, f, protocol=4)
+        def load_pickle(fn):
+            with open(fn, "rb") as f:
+                return pickle.load(f)
         
         steps = [
             int(np.ceil(self.dataset.width / sampling_distance)),
@@ -174,7 +302,7 @@ class SSAMAnalysis(object):
             ('%f' % bandwidth).rstrip('0').rstrip('.')
         ))
         if (use_mmap and not os.path.exists(vf_filename + '.dat')) or \
-                (not use_mmap and not os.path.exists(vf_filename + '.npy') and not os.path.exists(vf_filename + '.dat')):
+                (not use_mmap and not os.path.exists(vf_filename + '.pkl') and not os.path.exists(vf_filename + '.dat')):
             # If VF file doesn't exist, then run KDE
             if use_mmap:
                 vf = np.memmap(vf_filename + '.dat.tmp', dtype='double', mode='w+', shape=vf_shape)
@@ -248,15 +376,15 @@ class SSAMAnalysis(object):
                 os.rename(vf_filename + '.dat.tmp', vf_filename + '.dat')
                 vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
             elif self.use_savedir:
-                np.save(vf_filename + '.npy', vf)
+                save_pickle(vf_filename + '.pkl', vf)
         elif not use_mmap:
-            if os.path.exists(vf_filename + '.npy'):
-                vf = np.load(vf_filename + '.npy')
+            if os.path.exists(vf_filename + '.pkl'):
+                vf = load_pickle(vf_filename + '.pkl')
             else: # == os.path.exists(vf_filename + '.dat'):
                 vf_tmp = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
                 vf = np.array(vf_tmp, copy=True)
                 if self.use_savedir:
-                    np.save(vf_filename + '.npy', vf)
+                    save_pickle(vf_filename + '.pkl', vf)
         elif use_mmap:
             vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
         self.dataset.vf = vf
@@ -278,37 +406,26 @@ class SSAMAnalysis(object):
         self.dataset.corr_map = np.array(corr_map, copy=True)
         return
     
-    def find_localmax(self, search_size=20, min_norm=0):
+    def find_localmax(self, search_size=21, min_norm=0, mask=None):
         """
-        find_localmax(search_size = 20, min_norm = 0)
-            Find location of local maximum vectors in the L1 norm of the vector field.
+        find_localmax(search_size = 21, min_norm = 0)
+            Find local maxima vectors in the norm of the vector field.
 
             Parameters
             ----------
-            corr_size : int, optional
-                Size of square (or cube) that is used to compute the local correlation values.
-                This value should be an odd number.
             search_size : int, optional
                 Size of square (or cube) that is used to search for the local maximum values.
                 This value should be an odd number.
             min_norm : float, optional
-                Minimum value of L1 norm of the local maximum.
+                Minimum value of norm at the local maxima.
+            mask: numpy.ndarray, optional
+                If given, find vectors in the masked region, instead of the whole image.
         """
-        
-        #corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores, size=int(corr_size/2))
-        #self.dataset.corr_map = np.array(corr_map, copy=True)
-        #if self.dataset.is3d and corr_map.shape[-1] < 5:
-        #    selected_z = int(corr_map.shape[-1]/2)
-        #    self.__m__("Warning: depth of image is very small, only z == %d is considered for finding local maximum vectors."%selected_z)
-        #    corr_map = corr_map[..., selected_z]
-        #    max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
-        #    tmp = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
-        #    tmp[..., selected_z] = max_mask
-        #    max_mask = tmp
-        #else:
-        #    max_mask = corr_map == ndimage.maximum_filter(corr_map, size=search_size)
+
         max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
         max_mask &= self.dataset.vf_norm > min_norm
+        if mask is not None:
+            max_mask &= mask
         local_maxs = np.where(max_mask)
         self.__m__("Found %d local max vectors."%len(local_maxs[0]))
         self.dataset.local_maxs = local_maxs
@@ -376,13 +493,13 @@ class SSAMAnalysis(object):
         else:
             vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
         if normalize_gene:
-            vec = normalize(vec, norm=norm, axis=0) * vec.shape[1] # Normalize per gene
+            vec = preprocessing.normalize(vec, norm=norm, axis=0) * vec.shape[1] # Normalize per gene
         if normalize_vector:
-            vec = normalize(vec, norm=norm, axis=1) * vec.shape[0] # Normalize per vector
+            vec = preprocessing.normalize(vec, norm=norm, axis=1) * vec.shape[0] # Normalize per vector
         self.dataset.normalized_vectors = vec
         return
     
-    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, seed=-1, log_transform=False):
+    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, seed=-1, log_transform=False, scale=True):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
@@ -412,6 +529,8 @@ class SSAMAnalysis(object):
         vecs_normalized = self.dataset.normalized_vectors
         if log_transform:
             vecs_normalized = np.log1p(vecs_normalized)
+        if scale:
+            vecs_normalized = preprocessing.scale(vecs_normalized)
         vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
 
         def cluster_vecs(vecs):
@@ -504,6 +623,8 @@ class SSAMAnalysis(object):
         celltype_maps = []
         if centroids is None:
             centroids = self.dataset.centroids
+        if isinstance(min_norm, str):
+            filter_offset = filter_params.pop('offset', 0)
         for centroid in centroids:
             if log_transform:
                 ctmap = calc_ctmap(np.log(centroid + 1), np.log(self.dataset.vf + 1), self.ncores)
@@ -527,22 +648,39 @@ class SSAMAnalysis(object):
                     else:
                         highr_norm = self.dataset.vf_norm[ctmap > min_r]
                         #sigma = np.std(highr_norm)
-                        min_norm_cut = filter_func(highr_norm, **filter_params)
+                        if len(highr_norm) == 0 or np.max(highr_norm) == np.min(highr_norm):
+                            min_norm_cut = np.max(vf_norm)
+                        else:
+                            min_norm_cut = filter_func(highr_norm, **filter_params)
+                min_norm_cut -= filter_offset
             else:
-                min_norm_cut = float(min_norm)
+                min_norm_cut = min_norm
             ctmap[self.dataset.vf_norm < min_norm_cut] = 0
             if min_blob_area > 0:
                 mask = ctmap > 0
                 blob_labels = measure.label(mask, background=0)
                 for bp in measure.regionprops(blob_labels):
-                    minr, minc, maxr, maxc = bp.bbox
-                    if bp.filled_area < min_blob_area:
-                        mask[minr:maxr, minc:maxc] = 0
-                        continue
-                    if bp.area != bp.filled_area:
-                        mask[minr:maxr, minc:maxc] = bp.filled_image
+                    if len(bp.bbox) == 4:
+                        minr, minc, maxr, maxc = bp.bbox
+                        if bp.filled_area < min_blob_area:
+                            for c in bp.coords:
+                                mask[c[0], c[1]] = 0
+                            continue
+                        if bp.area != bp.filled_area:
+                            mask[minr:maxr, minc:maxc] |= bp.filled_image
+                    else:
+                        minr, minc, minz, maxr, maxc, maxz = bp.bbox
+                        if bp.filled_area < min_blob_area:
+                            for c in bp.coords:
+                                mask[c[0], c[1], c[2]] = 0
+                            continue
+                        if bp.area != bp.filled_area:
+                            mask[minr:maxr, minc:maxc, minz:maxz] |= bp.filled_image
             ctmap[~mask] = 0
             celltype_maps.append(sparse.COO(np.where(ctmap > 0), ctmap[ctmap > 0], shape=ctmap.shape))
+        stacked_ctmaps = sparse.stack(celltype_maps, axis=2)
+        self.dataset.max_corr = np.max(stacked_ctmaps, axis=2)
+        self.dataset.max_corr_idx = np.argmax(stacked_ctmaps, axis=2)
         self.dataset.celltype_maps = celltype_maps
         return
 
