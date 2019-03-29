@@ -4,6 +4,7 @@ try:
     import numpy as np
 except ImportError:
     print("Please install Numpy first. e.g. pip install numpy")
+    exit(1)
 from glob import glob
 
 module_utils = setuptools.extension.Extension('ssam.utils', sources=["c/utils.cpp"], extra_compile_args=["-fopenmp"], extra_link_args=["-fopenmp"], include_dirs=[np.get_include()])
@@ -36,5 +37,9 @@ setuptools.setup(
         "matplotlib",
         "seaborn",
         "scikit-learn",
+        "umap-learn",
+        "python-louvain",
+        "sparse",
+        "scikit-image",
     ]
 )
