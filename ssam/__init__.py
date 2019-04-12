@@ -137,10 +137,10 @@ class SSAMDataset(object):
             X = good_vecs
         return PCA(n_components=pca_dims).fit_transform(X)
         
-    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, colors=[], cmap="jet"):
+    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, random_state=0, colors=[], cmap="jet"):
         if run_tsne or self.tsne is None:
             pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
-            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric).fit_transform(pcs[:, :pca_dims])
+            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
         if self.cluster_labels is not None:
             if exclude_bad_clusters:
                 cols = self.cluster_labels[self.cluster_labels != -1]
@@ -153,10 +153,10 @@ class SSAMDataset(object):
         plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
         return
 
-    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, colors=[], cmap="jet"):
+    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, random_state=0, colors=[], cmap="jet"):
         if run_umap or self.umap is None:
             pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
-            self.umap = UMAP(metric=metric).fit_transform(pcs[:, :pca_dims])
+            self.umap = UMAP(metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
         if self.cluster_labels is not None:
             if exclude_bad_clusters:
                 cols = self.cluster_labels[self.cluster_labels != -1]
@@ -472,9 +472,9 @@ class SSAMAnalysis(object):
         self.dataset.valid_local_maxs = valid_pos_list
         return
     
-    def normalize_vectors(self, norm="l1", use_expanded_vectors=False, normalize_gene=True, normalize_vector=True):
+    def normalize_vectors(self, norm="l1", use_expanded_vectors=False, normalize_gene=False, normalize_vector=True, log_transform=True, scale=True):
         """
-        nomalize_vectors(norm = "l1", use_expanded_vectors = False, normalize_gene = True, normalize_vector = True)
+        nomalize_vectors(norm = "l1", use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
             Normalize vectors using scipy.preprocessing.normalization
             
             Parameters
@@ -487,19 +487,30 @@ class SSAMAnalysis(object):
                 If True, normalize vectors by sum of each gene expression across all vectors.
             normalize_vector: bool (default: True)
                 If True, normalize vectors by sum of all gene expression of each vector.
+            log_transform: bool (default: True)
+                If True, vectors are log transformed.
+            scale: bool (default: True)
+                if True, vectors are z-scaled (mean centered and scaled by stdev).
         """
         if use_expanded_vectors:
             vec = np.array(self.dataset.expanded_vectors, copy=True)
         else:
             vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
         if normalize_gene:
-            vec = preprocessing.normalize(vec, norm=norm, axis=0) * vec.shape[1] # Normalize per gene
+            vec = preprocessing.normalize(vec, norm=norm, axis=0) # Normalize per gene
         if normalize_vector:
-            vec = preprocessing.normalize(vec, norm=norm, axis=1) * vec.shape[0] # Normalize per vector
+            vec = preprocessing.normalize(vec, norm=norm, axis=1) # Normalize per vector
+        if log_transform:
+            vec = np.log2(vec + 1)
+        if scale:
+            ds.gene_means = np.mean(ds.normalized_vectors, axis=0)
+            ds.gene_stds = np.std(ds.normalized_vectors, axis=0)
+            vec = (vec - ds.gene_means) / ds.gene_stds
+            #vec = preprocessing.scale(vec)
         self.dataset.normalized_vectors = vec
         return
     
-    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, seed=-1, log_transform=False, scale=True):
+    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, random_state=0):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
@@ -520,17 +531,11 @@ class SSAMAnalysis(object):
                 Metric for calculation of distance between vectors in gene expression space.
             subclustering: bool, optional (default: False)
                 If True, each cluster will be clustered once again with the same method to find more subclusters.
-            seed: int, optional (default: -1)
-                Random seed for replication (TODO: at the moment it is not working).
-            log_transform: bool, optional (default: False)
-                if True, clustering will be done after taking log(x+1) of the vectors. The cluster centroids and medoids will be restored back with exp(x)-1.
+            random_state: int or random state object, optional (default: 0)
+                Random seed or scikit-learn's random state object to replicate result
         """
         
         vecs_normalized = self.dataset.normalized_vectors
-        if log_transform:
-            vecs_normalized = np.log1p(vecs_normalized)
-        if scale:
-            vecs_normalized = preprocessing.scale(vecs_normalized)
         vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
 
         def cluster_vecs(vecs):
@@ -546,7 +551,7 @@ class SSAMAnalysis(object):
             snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
             snn_graph[snn_graph < prune] = 0
             G = nx.from_numpy_matrix(snn_graph)
-            partition = community.best_partition(G, resolution=resolution, randomize=True)
+            partition = community.best_partition(G, resolution=resolution, random_state=random_state)
             lbls = np.array(list(partition.values()))
             low_clusters = []
             cluster_indices = []
@@ -587,14 +592,9 @@ class SSAMAnalysis(object):
             if lbl == -1:
                 continue
             cl_vecs = vecs_normalized[all_lbls == lbl, :]
-            if log_transform:
-                cl_vecs = np.log(cl_vecs + 1)
             cl_dists = scipy.spatial.distance.cdist(cl_vecs, cl_vecs, metric)
             medoid = cl_vecs[np.argmin(np.sum(cl_dists, axis=0))]
             centroid = np.mean(cl_vecs, axis=0)
-            if log_transform:
-                medoid = np.exp(medoid) - 1
-                centroid = np.exp(centroid) - 1
             medoids.append(medoid)
             centroids.append(centroid)
             
@@ -603,7 +603,7 @@ class SSAMAnalysis(object):
         self.dataset.cluster_labels = all_lbls
         return
 
-    def map_celltypes(self, centroids=None, min_r=0.6, min_norm="otsu", filter_params={}, min_blob_area=75, log_transform=False):
+    def map_celltypes(self, centroids=None, use_medoids=False, min_r=0.6, min_norm="otsu", filter_params={}, min_blob_area=75, log_transform=True):
         """
         map_celltypes(centroids = None, min_r = 0.6, log_transform = False)
             Create correlation maps between the centroids and the vector field.
@@ -612,12 +612,13 @@ class SSAMAnalysis(object):
             Parameters
             ----------
             centroids: np.array(float) or list(np.array(float)), default: None
-                If given, map celltypes with the given cluster centroids.
-                Otherwise, map celltypes with the clusters from the vector field.
+                If given, map celltypes with the given cluster centroids. Ignore 'use_medoids' parameter.
+            use_medoids: bool, default: False
+                Map cluster medoids instead of centroids.
             min_r: float, default: 0.6
                 Threshold for mimimum Pearson's correlation coefficient between the centroids and the vector field.
-            log_transform: bool, default: False
-                If True, the cluster centroids are mapped to vector field after taking log(x+1).
+            log_transform: bool, default: True
+                Log transform vector field before calculating correlation.
         """
         
         celltype_maps = []
@@ -626,10 +627,7 @@ class SSAMAnalysis(object):
         if isinstance(min_norm, str):
             filter_offset = filter_params.pop('offset', 0)
         for centroid in centroids:
-            if log_transform:
-                ctmap = calc_ctmap(np.log(centroid + 1), np.log(self.dataset.vf + 1), self.ncores)
-            else:
-                ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores)
+            ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores, log_transform)
             ctmap[ctmap < min_r] = 0
             
             if isinstance(min_norm, str):
@@ -676,11 +674,35 @@ class SSAMAnalysis(object):
                             continue
                         if bp.area != bp.filled_area:
                             mask[minr:maxr, minc:maxc, minz:maxz] |= bp.filled_image
-            ctmap[~mask] = 0
+                ctmap[~mask] = 0
             celltype_maps.append(sparse.COO(np.where(ctmap > 0), ctmap[ctmap > 0], shape=ctmap.shape))
-        stacked_ctmaps = sparse.stack(celltype_maps, axis=2)
-        self.dataset.max_corr = np.max(stacked_ctmaps, axis=2)
-        self.dataset.max_corr_idx = np.argmax(stacked_ctmaps, axis=2)
+        
+        newaxis = 3 if self.dataset.is3d else 2
+        stacked_ctmaps = sparse.stack(celltype_maps, axis=newaxis)
+        #self.dataset.max_corr = np.zeros_like(self.dataset.vf_norm)
+        #self.dataset.max_corr_idx = np.zeros_like(self.dataset.vf_norm, dtype='int')
+        #if newaxis == 2:
+        #    for i in range(stacked_ctmaps.shape[0]):
+        #        for j in range(stacked_ctmaps.shape[1]):
+        #            corr_vec = stacked_ctmaps[i, j, :].todense()
+        #            max_corr_vec_idx = np.argmax(corr_vec)
+        #            max_corr_vec = corr_vec[max_corr_vec_idx]
+        #            self.dataset.max_corr_idx[i, j] = max_corr_vec_idx
+        #            self.dataset.max_corr[i, j] = max_corr_vec
+        #else:
+        #    for i in range(stacked_ctmaps.shape[0]):
+        #        for j in range(stacked_ctmaps.shape[1]):
+        #            for k in range(stacked_ctmaps.shape[2]):
+        #                corr_vec = stacked_ctmaps[i, j, k, :]
+        #                max_corr_vec_idx = np.argmax(corr_vec)
+        #                max_corr_vec = corr_vec[max_corr_vec_idx]
+        #                self.dataset.max_corr_idx[i, j, k] = max_corr_vec_idx
+        #                self.dataset.max_corr[i, j, k] = max_corr_vec
+        self.dataset.max_corr = np.max(stacked_ctmaps, axis=newaxis).todense()
+        
+        # TODO: This uses too much memory
+        self.dataset.max_corr_idx = np.argmax(stacked_ctmaps.todense(), axis=newaxis)
+        
         self.dataset.celltype_maps = celltype_maps
         return
 

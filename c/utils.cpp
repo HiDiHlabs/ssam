@@ -81,8 +81,8 @@ static PyObject *flood_fill(PyObject *self, PyObject *args, PyObject *kwargs) {
     int i;
     bool *mask;
 
-    static char *kwlist[] = { "pos", "vf", "r", "min_pixels", "max_pixels", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|dii", kwlist, &arg1, &arg2, &r, &min_pixels, &max_pixels)) return NULL;
+    static const char *kwlist[] = { "pos", "vf", "r", "min_pixels", "max_pixels", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|dii", const_cast<char **>(kwlist), &arg1, &arg2, &r, &min_pixels, &max_pixels)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_LONG, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
     if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     if (PyArray_NDIM(arr1) != 1) goto fail;
@@ -248,8 +248,8 @@ static PyObject *calc_corrmap(PyObject *self, PyObject *args, PyObject *kwargs) 
     int csize = 1;
     double *tmpvec;
 
-    static char *kwlist[] = { "vf", "ncores", "size", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", kwlist, &arg1, &ncores, &csize)) return NULL;
+    static const char *kwlist[] = { "vf", "ncores", "size", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", const_cast<char **>(kwlist), &arg1, &ncores, &csize)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;   
     nd = PyArray_NDIM(arr1);
     if (nd != 3 && nd != 4) goto fail; // only 2D or 3D array is expected
@@ -340,8 +340,8 @@ static PyObject *calc_corrmap_2(PyObject *self, PyObject *args, PyObject *kwargs
     int ncores = omp_get_max_threads();
     int csize = 1;
 
-    static char *kwlist[] = { "vf", "ncores", "size", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", kwlist, &arg1, &ncores, &csize)) return NULL;
+    static const char *kwlist[] = { "vf", "ncores", "size", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", const_cast<char **>(kwlist), &arg1, &ncores, &csize)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;   
     nd = PyArray_NDIM(arr1);
     if (nd != 3 && nd != 4) goto fail; // only 2D or 3D array is expected
@@ -409,23 +409,29 @@ static PyObject *calc_corrmap_2(PyObject *self, PyObject *args, PyObject *kwargs
 static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *arg1 = NULL;
     PyObject *arg2 = NULL;
+    PyObject *log_transform = NULL;
+    PyObject *isscale = NULL;
+    PyObject * = NULL;
+    PyObject *isscale = NULL;
     PyArrayObject *arr1 = NULL;
     PyArrayObject *arr2 = NULL;
     PyArrayObject *oarr = NULL;
     long nvec, nd, ngene = 0;
-    double *cent, *vecs, *scores;
+    double *cent, *vecs, *scores, *tmpvec;
     npy_intp *dimsp;
     int ncores = omp_get_max_threads();
     int i;
+    bool is_log_transform;
 
-    static char *kwlist[] = { "vec", "vf", "ncores", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|i", kwlist, &arg1, &arg2, &ncores)) return NULL;
+    static const char *kwlist[] = { "vec", "vf", "ncores", "log_transform", "scale", "scale_means", "scale_stds", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|iOOOO", const_cast<char **>(kwlist), &arg1, &arg2, &ncores, &log_transform, &isscale, &scale_means, &scale_stds)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
     if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     if (PyArray_NDIM(arr1) != 1) goto fail;
     nd = PyArray_NDIM(arr2);
     if((ngene = *PyArray_DIMS(arr1)) != PyArray_DIMS(arr2)[nd-1]) goto fail;
 
+    is_log_transform = PyObject_IsTrue(log_transform);
     dimsp = PyArray_DIMS(arr2);
     oarr = (PyArrayObject*)PyArray_ZEROS(nd - 1, dimsp, NPY_DOUBLE, NPY_CORDER);
 
@@ -437,9 +443,9 @@ static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     cent = (double *)PyArray_DATA(arr1);
     vecs = (double *)PyArray_DATA(arr2);
 
-    #pragma omp parallel for num_threads(ncores)
+    #pragma omp parallel for private(i, tmpvec) num_threads(ncores)
     for (i=0; i<nvec; i++) {
-        scores[i] = __corr__(cent, vecs + (i*ngene), ngene);
+        scores[i] = __corr__(cent, vecs + (i*ngene), ngene, false, is_log_transform);
     }
 
     Py_DECREF(arr1);
