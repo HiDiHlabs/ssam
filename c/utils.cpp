@@ -30,6 +30,22 @@ struct pos3d {
     long z;
 };
 
+static double gauss_kernel(double x, double y, double z) {
+    return exp(-0.5 * (x*x + y*y + z*z)); // this is not normalized
+}
+
+static double kde(double bandwidth, double *x, double *y, double *z, double* query_x, double* query_y, double *query_z, double *rtn, unsigned int num_points, unsigned int num_querys, double (*kernel)(double, double, double), int ncores) {
+    unsigned int i, j;
+    double d;
+    #pragma omp parallel for num_threads(ncores) private(i, j, d)
+    for (i=0; i<num_querys; i++) {
+        d = 0;
+        for (j=0; j< num_points; j++)
+            d += kernel((query_x[i] - x[j])/bandwidth, (query_y[i] - y[j])/bandwidth, (query_z[i] - z[j])/bandwidth);
+        rtn[i] = d; // not normalized
+    }
+}
+
 static double __corr__(double *a, double *b, int ngene) {
     double a_mean = 0;
     double b_mean = 0;
@@ -65,6 +81,77 @@ static double __corr__(double *a, double *b, int ngene) {
 
     rtn /= ngene;
     return rtn;
+}
+
+static PyObject *calc_kde(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *arg1 = NULL;
+    PyObject *arg2 = NULL;
+    PyObject *arg3 = NULL;
+    PyObject *arg4 = NULL;
+    PyObject *arg5 = NULL;
+    PyObject *arg6 = NULL;
+    PyArrayObject *arr1 = NULL;
+    PyArrayObject *arr2 = NULL;
+    PyArrayObject *arr3 = NULL;
+    PyArrayObject *arr4 = NULL;
+    PyArrayObject *arr5 = NULL;
+    PyArrayObject *arr6 = NULL;
+    PyArrayObject *oarr = NULL;
+    int ncores = omp_get_max_threads();
+    double *x, *y, *z, *qx, *qy, *qz, *rtn;
+    double h = 2;
+    int kernel = 0;
+    unsigned int npts, nqrys;
+    npy_intp nqrys_npy;
+    
+    static char *kwlist[] = { "h", "x", "y", "z", "q_x", "q_y", "q_z", "kernel", "ncores", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dOOOOOO|ii", kwlist, &h, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &kernel, &ncores)) return NULL;
+    if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
+    if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if ((arr3 = (PyArrayObject*)PyArray_FROM_OTF(arg3, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if ((arr4 = (PyArrayObject*)PyArray_FROM_OTF(arg4, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if ((arr5 = (PyArrayObject*)PyArray_FROM_OTF(arg5, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if ((arr6 = (PyArrayObject*)PyArray_FROM_OTF(arg6, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    
+    if (PyArray_NDIM(arr1) != 1 || PyArray_NDIM(arr2) != 1 || PyArray_NDIM(arr3) != 1 ||
+        PyArray_NDIM(arr4) != 1 || PyArray_NDIM(arr5) != 1 || PyArray_NDIM(arr6) != 1)
+    {
+        goto fail;
+    }
+
+    npts = PyArray_DIMS(arr1)[0];
+    nqrys = PyArray_DIMS(arr4)[0];
+    nqrys_npy = nqrys;
+    
+    oarr = (PyArrayObject*)PyArray_ZEROS(1, &nqrys_npy, NPY_DOUBLE, NPY_CORDER);
+
+    x = (double *)PyArray_DATA(arr1);
+    y = (double *)PyArray_DATA(arr2);
+    z = (double *)PyArray_DATA(arr3);
+    qx = (double *)PyArray_DATA(arr4);
+    qy = (double *)PyArray_DATA(arr5);
+    qz = (double *)PyArray_DATA(arr6);
+    rtn = (double *)PyArray_DATA(oarr);
+    
+    kde(h, x, y, z, qx, qy, qz, rtn, npts, nqrys, gauss_kernel, ncores);
+
+    Py_DECREF(arr1);
+    Py_DECREF(arr2);
+    Py_DECREF(arr3);
+    Py_DECREF(arr4);
+    Py_DECREF(arr5);
+    Py_DECREF(arr6);
+    
+    return (PyObject *) oarr;
+    
+fail:
+    Py_XDECREF(arr1);
+    Py_XDECREF(arr2);
+    Py_XDECREF(arr3);
+    Py_XDECREF(arr4);
+    Py_XDECREF(arr5);
+    Py_XDECREF(arr6);
+    return NULL;
 }
 
 static PyObject *flood_fill(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -495,6 +582,7 @@ static struct PyMethodDef module_methods[] = {
     {"calc_ctmap", (PyCFunction)calc_ctmap, METH_VARARGS | METH_KEYWORDS, "Creates a cell type map."},
     {"calc_corrmap", (PyCFunction)calc_corrmap, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
     {"calc_corrmap_2", (PyCFunction)calc_corrmap_2, METH_VARARGS | METH_KEYWORDS, "Creates a correlation map."},
+    {"calc_kde", (PyCFunction)calc_kde, METH_VARARGS | METH_KEYWORDS, "Run kernel density estimation."},
     {"flood_fill", (PyCFunction)flood_fill, METH_VARARGS | METH_KEYWORDS, "Performs 3d flood fill based on correlation."},
     {NULL, NULL, 0, NULL}
 };

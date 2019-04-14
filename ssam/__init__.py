@@ -1,5 +1,5 @@
 import numpy as np
-import pandas as pd
+#import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
@@ -25,21 +25,21 @@ from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
 from matplotlib.colors import ListedColormap
-import pickle
-from .utils import corr, calc_ctmap, calc_corrmap, flood_fill
+import feather
+from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
 class SSAMDataset(object):
-    def __init__(self, genes, positions, width, height, depth=1):
+    def __init__(self, genes, locations, width, height, depth=1):
         """
-        SSAMDataset(genes, positions, width, height, depth = 1, ncores = -1, save_dir = "", verbose = False)
+        SSAMDataset(genes, locations, width, height, depth = 1, ncores = -1, save_dir = "", verbose = False)
             A class to store intial values and results of SSAM analysis.
 
             Parameters
             ----------
             genes : list(string)
                 The genes that will be used for the analysis.
-            positions : list(numpy.ndarray)
-                Position of the mRNAs in um, given as a list of
+            locations : list(numpy.ndarray)
+                Location of the mRNAs in um, given as a list of
                 N x D ndarrays (N is number of mRNAs, D is number of dimensions).
             width : float
                 Width of the image in um.
@@ -57,13 +57,18 @@ class SSAMDataset(object):
         """
         
         if depth < 1 or width < 1 or height < 1:
-            raise ValueError
-        self.width = width
-        self.height = height
-        self.depth = depth
+            raise ValueError("Invalid image dimension")
+        self.shape = (width, height, depth)
+        self.ndim = 2 if depth == 1 else 3
         self.genes = list(genes)
-        self.positions = list(positions)
-        self.is3d = depth > 1
+        self.locations = []
+        for l in list(locations):
+            if l.shape[-1] == 3:
+                self.locations.append(l)
+            elif l.shape[-1] == 2:
+                self.locations.append(np.concatenate((l, np.zeros([l.shape[0], 1])), axis=1))
+            else:
+                raise ValueError("Invalid mRNA locations")
         self.__vf = None
         self.__vf_norm = None
         self.normalized_vectors = None
@@ -261,12 +266,11 @@ class SSAMAnalysis(object):
     def __m__(self, message):
         if self.verbose:
             print(message)
-
+            
     def run_kde(self, kernel="gaussian", bandwidth=2.0, sampling_distance=1.0, use_mmap=True):
         """
         run_kde(kernel = "gaussian", bandwidth = 2.0, sampling_distance = 1.0)
             Run KDE to estimate density of mRNA.
-
             Parameters
             ----------
             kernel : string, optional
@@ -287,14 +291,7 @@ class SSAMAnalysis(object):
             with open(fn, "rb") as f:
                 return pickle.load(f)
         
-        steps = [
-            int(np.ceil(self.dataset.width / sampling_distance)),
-            int(np.ceil(self.dataset.height / sampling_distance)),
-        ]
-        if self.dataset.is3d:
-            steps.append(
-                int(np.ceil(self.dataset.depth / sampling_distance))
-            )
+        steps = [int(np.ceil(e / sampling_distance)) for e in self.dataset.shape]
         total_steps = np.prod(steps)
         vf_shape = tuple(steps + [len(self.dataset.genes), ])
         vf_filename = os.path.join(self.save_dir, 'vf_sd%s_bw%s'%(
@@ -315,17 +312,8 @@ class SSAMAnalysis(object):
                 remaining_cnt = total_steps
                 for x in range(steps[0]):
                     for y in range(steps[1]):
-                        if self.dataset.is3d:
-                            for z in range(steps[2]):
-                                chunk[cnt, :] = [x, y, z]
-                                cnt += 1
-                                if cnt == chunksize:
-                                    yield chunk
-                                    remaining_cnt -= cnt
-                                    cnt = 0
-                                    chunk = np.zeros(shape=[min(chunksize, remaining_cnt), len(steps)], dtype=int)
-                        else:
-                            chunk[cnt, :] = [x, y]
+                        for z in range(steps[2]):
+                            chunk[cnt, :] = [x, y, z]
                             cnt += 1
                             if cnt == chunksize:
                                 yield chunk
@@ -358,19 +346,25 @@ class SSAMAnalysis(object):
                 else:
                     self.__m__("Running KDE for %s..."%gene_name)
                     pdf = np.zeros(shape=vf_shape[:-1])
-                    kde = KernelDensity(kernel=kernel, bandwidth=bandwidth).fit(self.dataset.positions[gidx])
-                    if pool is None:
-                        pool = multiprocessing.Pool(self.ncores)
+                    if kernel != "gaussian":
+                        kde = KernelDensity(kernel=kernel, bandwidth=bandwidth).fit(self.dataset.locations[gidx])
+                        if pool is None:
+                            pool = multiprocessing.Pool(self.ncores)
+                    else:
+                        X, Y, Z = [self.dataset.locations[gidx][:, i] for i in range(3)]
                     for chunks in yield_chunks():
-                        pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
+                        if kernel == "gaussian:
+                            pdf_chunks = [calc_kde(bandwidth, chunk[:, 0], chunk[:, 1], chunk[:, 2], X, Y, Z, 0, self.ncores) for chunk in chunks]
+                        else:
+                            pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
                         for pdf_chunk, pos_chunk in zip(pdf_chunks, chunks):
-                            if self.dataset.is3d:
-                                pdf[pos_chunk[:, 0], pos_chunk[:, 1], pos_chunk[:, 2]] = np.exp(pdf_chunk)
+                            if kernel == "gaussian":
+                                pdf[pos_chunk[:, 0], pos_chunk[:, 1], pos_chunk[:, 2]] = pdf_chunk
                             else:
-                                pdf[pos_chunk[:, 0], pos_chunk[:, 1]] = np.exp(pdf_chunk)
+                                pdf[pos_chunk[:, 0], pos_chunk[:, 1], pos_chunk[:, 2]] = np.exp(pdf_chunk)
                     pdf /= np.sum(pdf)
                     np.save(pdf_filename, pdf)
-                vf[..., gidx] = pdf * len(self.dataset.positions[gidx])
+                vf[..., gidx] = pdf * len(self.dataset.locations[gidx])
             if use_mmap:
                 vf.flush()
                 os.rename(vf_filename + '.dat.tmp', vf_filename + '.dat')
@@ -449,10 +443,7 @@ class SSAMAnalysis(object):
         
         expanded_vecs = []
         self.__m__("Expanding local max vectors...")
-        if self.dataset.is3d:
-            fill_dx = np.meshgrid(range(3), range(3), range(3))
-        else:
-            fill_dx = np.meshgrid(range(3), range(3))
+        fill_dx = np.meshgrid(range(3), range(3), range(3))
         fill_dx = np.array(list(zip(*[np.ravel(e) - 1 for e in fill_dx])))
         mask = np.zeros(self.dataset.vf.shape[:-1]) # TODO: sparse?
         nlocalmaxs = len(self.dataset.local_maxs[0])
