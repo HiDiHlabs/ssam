@@ -104,8 +104,8 @@ static PyObject *calc_kde(PyObject *self, PyObject *args, PyObject *kwargs) {
     unsigned int npts, nqrys;
     npy_intp nqrys_npy;
     
-    static char *kwlist[] = { "h", "x", "y", "z", "q_x", "q_y", "q_z", "kernel", "ncores", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dOOOOOO|ii", kwlist, &h, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &kernel, &ncores)) return NULL;
+    static const char *kwlist[] = { "h", "x", "y", "z", "q_x", "q_y", "q_z", "kernel", "ncores", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dOOOOOO|ii", const_cast<char **>(kwlist), &h, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &kernel, &ncores)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
     if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     if ((arr3 = (PyArrayObject*)PyArray_FROM_OTF(arg3, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
@@ -496,29 +496,23 @@ static PyObject *calc_corrmap_2(PyObject *self, PyObject *args, PyObject *kwargs
 static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *arg1 = NULL;
     PyObject *arg2 = NULL;
-    PyObject *log_transform = NULL;
-    PyObject *isscale = NULL;
-    PyObject * = NULL;
-    PyObject *isscale = NULL;
     PyArrayObject *arr1 = NULL;
     PyArrayObject *arr2 = NULL;
     PyArrayObject *oarr = NULL;
     long nvec, nd, ngene = 0;
-    double *cent, *vecs, *scores, *tmpvec;
+    double *cent, *vecs, *scores;
     npy_intp *dimsp;
     int ncores = omp_get_max_threads();
     int i;
-    bool is_log_transform;
 
-    static const char *kwlist[] = { "vec", "vf", "ncores", "log_transform", "scale", "scale_means", "scale_stds", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|iOOOO", const_cast<char **>(kwlist), &arg1, &arg2, &ncores, &log_transform, &isscale, &scale_means, &scale_stds)) return NULL;
+    static const char *kwlist[] = { "vec", "vf", "ncores", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|i", const_cast<char **>(kwlist), &arg1, &arg2, &ncores)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
     if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     if (PyArray_NDIM(arr1) != 1) goto fail;
     nd = PyArray_NDIM(arr2);
     if((ngene = *PyArray_DIMS(arr1)) != PyArray_DIMS(arr2)[nd-1]) goto fail;
 
-    is_log_transform = PyObject_IsTrue(log_transform);
     dimsp = PyArray_DIMS(arr2);
     oarr = (PyArrayObject*)PyArray_ZEROS(nd - 1, dimsp, NPY_DOUBLE, NPY_CORDER);
 
@@ -530,9 +524,9 @@ static PyObject *calc_ctmap(PyObject *self, PyObject *args, PyObject *kwargs) {
     cent = (double *)PyArray_DATA(arr1);
     vecs = (double *)PyArray_DATA(arr2);
 
-    #pragma omp parallel for private(i, tmpvec) num_threads(ncores)
+    #pragma omp parallel for num_threads(ncores)
     for (i=0; i<nvec; i++) {
-        scores[i] = __corr__(cent, vecs + (i*ngene), ngene, false, is_log_transform);
+        scores[i] = __corr__(cent, vecs + (i*ngene), ngene);
     }
 
     Py_DECREF(arr1);

@@ -353,7 +353,7 @@ class SSAMAnalysis(object):
                     else:
                         X, Y, Z = [self.dataset.locations[gidx][:, i] for i in range(3)]
                     for chunks in yield_chunks():
-                        if kernel == "gaussian:
+                        if kernel == "gaussian":
                             pdf_chunks = [calc_kde(bandwidth, chunk[:, 0], chunk[:, 1], chunk[:, 2], X, Y, Z, 0, self.ncores) for chunk in chunks]
                         else:
                             pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
