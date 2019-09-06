@@ -34,14 +34,15 @@ static double gauss_kernel(double x, double y, double z) {
     return exp(-0.5 * (x*x + y*y + z*z)); // this is not normalized
 }
 
-static double kde(double bandwidth, double *x, double *y, double *z, double* query_x, double* query_y, double *query_z, double *rtn, unsigned int num_points, unsigned int num_querys, double (*kernel)(double, double, double), int ncores) {
+static void kde(double bandwidth, double *x, double *y, double *z, double* query_x, double* query_y, double *query_z, double *rtn, unsigned int num_points, unsigned int num_querys, double (*kernel)(double, double, double), double maxdist, int ncores) {
     unsigned int i, j;
     double d;
     #pragma omp parallel for num_threads(ncores) private(i, j, d)
     for (i=0; i<num_querys; i++) {
         d = 0;
         for (j=0; j< num_points; j++)
-            d += kernel((query_x[i] - x[j])/bandwidth, (query_y[i] - y[j])/bandwidth, (query_z[i] - z[j])/bandwidth);
+            if (sqrt((query_x[i] - x[j]) * (query_x[i] - x[j]) + (query_y[i] - y[j]) * (query_y[i] - y[j]) + (query_z[i] - z[j]) * (query_z[i] - z[j])) < maxdist)
+                d += kernel((query_x[i] - x[j])/bandwidth, (query_y[i] - y[j])/bandwidth, (query_z[i] - z[j])/bandwidth);
         rtn[i] = d; // not normalized
     }
 }
@@ -100,6 +101,7 @@ static PyObject *calc_kde(PyObject *self, PyObject *args, PyObject *kwargs) {
     int ncores = omp_get_max_threads();
     double *x, *y, *z, *qx, *qy, *qz, *rtn;
     double h = 2;
+    double maxdist_gauss = -1;
     int kernel = 0;
     unsigned int npts, nqrys;
     npy_intp nqrys_npy;
@@ -133,7 +135,8 @@ static PyObject *calc_kde(PyObject *self, PyObject *args, PyObject *kwargs) {
     qz = (double *)PyArray_DATA(arr6);
     rtn = (double *)PyArray_DATA(oarr);
     
-    kde(h, x, y, z, qx, qy, qz, rtn, npts, nqrys, gauss_kernel, ncores);
+    maxdist_gauss = sqrt(2) * h * log((double)(1000000 * npts));
+    kde(h, x, y, z, qx, qy, qz, rtn, npts, nqrys, gauss_kernel, maxdist_gauss, ncores);
 
     Py_DECREF(arr1);
     Py_DECREF(arr2);

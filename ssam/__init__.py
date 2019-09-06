@@ -1,5 +1,5 @@
 import numpy as np
-#import pandas as pd
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from umap import UMAP
 #from scipy.stats import pearsonr
-from tempfile import mkdtemp
+from tempfile import mkdtemp, TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 import community
@@ -25,8 +25,22 @@ from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
 from matplotlib.colors import ListedColormap
-import feather
+import pickle
+import subprocess
+from scipy.spatial.distance import cdist
+
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
+
+def run_sctransform(data):
+    with TemporaryDirectory() as tmpdirname:
+        ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
+        df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
+        df.to_feather(ifn)
+        rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat); write_feather(as.data.frame(t(res$y)), "{1}"); write_feather(as.data.frame(res$model_pars_fit), "{2}");'.format(ifn, ofn, pfn)
+        with open(rfn, "w") as f:
+            f.write(rcmd)
+        subprocess.check_output("Rscript " + rfn, shell=True)
+        return pd.read_feather(ofn), pd.read_feather(pfn)
 
 class SSAMDataset(object):
     def __init__(self, genes, locations, width, height, depth=1):
@@ -77,6 +91,8 @@ class SSAMDataset(object):
         #self.corr_map = None
         self.tsne = None
         self.umap = None
+        self.normalized_vf = None
+        self.excluded_clusters = None
 
     @property
     def vf(self):
@@ -95,16 +111,20 @@ class SSAMDataset(object):
             self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
         return self.__vf_norm
     
-    def plot_l1norm(self, cmap="viridis", rotate=0):
+    def get_celltype_correlation(self, idx):
+        rtn = np.zeros_like(self.max_correlations) - 1
+        rtn[self.celltype_maps == idx] = self.max_correlations[self.celltype_maps == idx]
+        return rtn
+    
+    def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
+        if z is None:
+            z = int(self.vf_norm.shape[2] / 2)
         if rotate < 0 or rotate > 3:
             raise ValueError("rotate can only be 0, 1, 2, 3")
         im = np.array(self.vf_norm, copy=True)
         if rotate == 1 or rotate == 3:
-            im = im.T
-        if len(self.vf_norm.shape) == 3:
-            plt.imshow(im[int(self.vf_norm.shape[2] / 2)], cmap=cmap)
-        else:
-            plt.imshow(im, cmap=cmap)
+            im = im.swapaxes(0, 1)
+        plt.imshow(im[..., z], cmap=cmap)
         if rotate == 1:
             plt.gca().invert_xaxis()
         elif rotate == 2:
@@ -113,14 +133,14 @@ class SSAMDataset(object):
         elif rotate == 3:
             plt.gca().invert_yaxis()
 
-    def plot_localmax(self, c=None, s=1, rotate=0):
+    def plot_localmax(self, c=None, cmap=None, s=1, rotate=0):
         if rotate < 0 or rotate > 3:
             raise ValueError("rotate can only be 0, 1, 2, 3")
         if rotate == 0 or rotate == 2:
             dim0, dim1 = 1, 0
         elif rotate == 1 or rotate == 3:
             dim0, dim1 = 0, 1
-        plt.scatter(self.local_maxs[dim0], self.local_maxs[dim1], s=s, c=None)
+        plt.scatter(self.local_maxs[dim0], self.local_maxs[dim1], s=s, c=c, cmap=cmap)
         plt.xlim([0, self.vf_norm.shape[dim0]])
         plt.ylim([self.vf_norm.shape[dim1], 0])
         if rotate == 1:
@@ -131,88 +151,95 @@ class SSAMDataset(object):
         elif rotate == 3:
             plt.gca().invert_yaxis()    
         
-    def __run_pca(self, exclude_bad_clusters, pca_dims, log_transform):
+    def __run_pca(self, exclude_bad_clusters, pca_dims, random_state):
         if exclude_bad_clusters:
-            good_vecs = self.normalized_vectors[self.cluster_labels != -1, :]
+            good_vecs = self.normalized_vectors[self.filtered_cluster_labels != -1, :]
         else:
             good_vecs = self.normalized_vectors
-        if log_transform:
-            X = np.log(good_vecs + 1)
-        else:
-            X = good_vecs
-        return PCA(n_components=pca_dims).fit_transform(X)
+        return PCA(n_components=pca_dims, random_state=random_state).fit_transform(good_vecs)
         
-    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, random_state=0, colors=[], cmap="jet"):
+    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet"):
+        if self.filtered_cluster_labels is None:
+            exclude_bad_clusters = False
         if run_tsne or self.tsne is None:
-            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
+            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
             self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
-        if self.cluster_labels is not None:
-            if exclude_bad_clusters:
-                cols = self.cluster_labels[self.cluster_labels != -1]
-            else:
-                cols = self.cluster_labels
+        if self.filtered_cluster_labels is not None:
+            cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
         else:
             cols = None
         if len(colors) > 0:
             cmap = ListedColormap(colors)
-        plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
+        if not exclude_bad_clusters and self.filtered_cluster_labels is not None:
+            plt.scatter(self.tsne[:, 0][self.filtered_cluster_labels == -1], self.tsne[:, 1][self.filtered_cluster_labels == -1], s=s, c=excluded_color)
+            plt.scatter(self.tsne[:, 0][self.filtered_cluster_labels != -1], self.tsne[:, 1][self.filtered_cluster_labels != -1], s=s, c=cols, cmap=cmap)
+        else:
+            plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
         return
 
-    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, log_transform=False, s=None, random_state=0, colors=[], cmap="jet"):
+    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet"):
+        if self.filtered_cluster_labels is None:
+            exclude_bad_clusters = False
         if run_umap or self.umap is None:
-            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, log_transform)
+            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
             self.umap = UMAP(metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
-        if self.cluster_labels is not None:
+        if self.filtered_cluster_labels is not None:
             if exclude_bad_clusters:
-                cols = self.cluster_labels[self.cluster_labels != -1]
+                cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
             else:
-                cols = self.cluster_labels
+                cols = self.filtered_cluster_labels
         else:
             cols = None
         if len(colors) > 0:
             cmap = ListedColormap(colors)
-        plt.scatter(self.umap[:, 0], self.umap[:, 1], s=s, c=cols, cmap=cmap)
+        if not exclude_bad_clusters and self.filtered_cluster_labels is not None:
+            plt.scatter(self.umap[:, 0][self.filtered_cluster_labels == -1], self.umap[:, 1][self.filtered_cluster_labels == -1], s=s, c=excluded_color)
+            plt.scatter(self.umap[:, 0][self.filtered_cluster_labels != -1], self.umap[:, 1][self.filtered_cluster_labels != -1], s=s, c=cols, cmap=cmap)
+        else:
+            plt.scatter(self.umap[:, 0], self.umap[:, 1], s=s, c=cols, cmap=cmap)
         return
 
-    def plot_expanded_mask(self, cmap='Greys'):
+    def plot_expanded_mask(self, cmap='Greys'): # TODO
         plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap)
         return
     
-    def plot_correlation_map(self, cmap='hot'):
-        plt.imshow(ds.corr_map, vmin=0.995, vmax=1.0, cmap=cmap)
+    def plot_correlation_map(self, cmap='hot'): # TODO
+        plt.imshow(self.corr_map, vmin=0.995, vmax=1.0, cmap=cmap)
         plt.colorbar()
         return
     
-    def plot_celltypes_map(self, output_mask=None, background="black", centroid_indices=[], colors=None, min_r=0.6, min_norm=0.1, rotate=0):
+    def plot_celltypes_map(self, output_mask=None, background="black", centroid_indices=[], colors=None, cmap='jet', rotate=0, min_r=0.6, set_alpha=True, z=None):
+        if z is None:
+            z = int(self.shape[2] / 2)
+        num_ctmaps = np.max(self.filtered_celltype_maps) + 1
+        
         if len(centroid_indices) == 0:
-            centroid_indices = range(len(self.celltype_maps))
-
-        if colors is None:
-            cmap = plt.get_cmap('jet')
-            colors = cmap([float(i) / (len(centroid_indices) - 1) for i in range(len(centroid_indices))])
+            centroid_indices = list(range(num_ctmaps))
             
-        all_colors = ["#000000" if not j in centroid_indices else colors[i] for i, j in enumerate(range(len(self.celltype_maps)))]
-        cmap = ListedColormap(all_colors)
-        if rotate == 1 or rotate == 3:
-            max_corr_idx = self.max_corr_idx.T
-            vf_norm = self.vf_norm.T
-            max_corr = self.max_corr.T
-        else:
-            max_corr_idx = self.max_corr_idx
-            vf_norm = self.vf_norm
-            max_corr = self.max_corr
+        if colors is None:
+            cmap_internal = plt.get_cmap(cmap)
+            colors = cmap_internal([float(i) / (num_ctmaps - 1) for i in range(num_ctmaps)])
+            
+        all_colors = [background if not j in centroid_indices else colors[i] for i, j in enumerate(range(num_ctmaps))]
+        cmap_internal = ListedColormap(all_colors)
 
-        sctmap = cmap(max_corr_idx)
+        celltype_maps_internal = np.array(self.filtered_celltype_maps[..., z], copy=True)
+        empty_mask = celltype_maps_internal == -1
+        celltype_maps_internal[empty_mask] = 0
+        sctmap = cmap_internal(celltype_maps_internal)
         if output_mask is not None:
             sctmap[~output_mask.astype(bool)] = (0, 0, 0, 0)
-        sctmap[vf_norm < min_norm] = (0, 0, 0, 0)
-        sctmap[max_corr < min_r] = (0, 0, 0, 0)
-        
-        #alpha = max_corr - fade_start
-        #alpha[alpha < 0] = 0
-        #alpha /= np.max(alpha)
-        #sctmap[..., 3] = alpha
-        
+        sctmap[empty_mask] = (0, 0, 0, 0)
+
+        if set_alpha:
+            alpha = np.array(self.max_correlations[..., z], copy=True)
+            alpha[alpha < 0] = 0 # drop negative correlations
+            alpha = min_r + alpha / (np.max(alpha) / (1.0 - min_r))
+            sctmap[..., 3] = alpha
+
+        if rotate == 1 or rotate == 3:
+            sctmap = sctmap.swapaxes(0, 1)
+
         plt.gca().set_facecolor(background)
         plt.imshow(sctmap)
         
@@ -354,7 +381,7 @@ class SSAMAnalysis(object):
                         X, Y, Z = [self.dataset.locations[gidx][:, i] for i in range(3)]
                     for chunks in yield_chunks():
                         if kernel == "gaussian":
-                            pdf_chunks = [calc_kde(bandwidth, chunk[:, 0], chunk[:, 1], chunk[:, 2], X, Y, Z, 0, self.ncores) for chunk in chunks]
+                            pdf_chunks = [calc_kde(bandwidth, X, Y, Z, chunk[:, 0], chunk[:, 1], chunk[:, 2], 0, self.ncores) for chunk in chunks]
                         else:
                             pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
                         for pdf_chunk, pos_chunk in zip(pdf_chunks, chunks):
@@ -400,7 +427,7 @@ class SSAMAnalysis(object):
         self.dataset.corr_map = np.array(corr_map, copy=True)
         return
     
-    def find_localmax(self, search_size=21, min_norm=0, mask=None):
+    def find_localmax(self, search_size=21, min_norm=0, min_expression=0.05, mask=None):
         """
         find_localmax(search_size = 21, min_norm = 0)
             Find local maxima vectors in the norm of the vector field.
@@ -412,12 +439,19 @@ class SSAMAnalysis(object):
                 This value should be an odd number.
             min_norm : float, optional
                 Minimum value of norm at the local maxima.
+            min_expression : float, optional
+                Minimum value of gene expression in a unit pixel at the local maxima.
             mask: numpy.ndarray, optional
                 If given, find vectors in the masked region, instead of the whole image.
         """
 
         max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
         max_mask &= self.dataset.vf_norm > min_norm
+        if min_expression > 0:
+            exp_mask = np.zeros_like(max_mask)
+            for i in range(len(self.dataset.genes)):
+                exp_mask |= self.dataset.vf[..., i] > min_expression
+            max_mask &= exp_mask
         if mask is not None:
             max_mask &= mask
         local_maxs = np.where(max_mask)
@@ -463,15 +497,40 @@ class SSAMAnalysis(object):
         self.dataset.valid_local_maxs = valid_pos_list
         return
     
-    def normalize_vectors(self, norm="l1", use_expanded_vectors=False, normalize_gene=False, normalize_vector=True, log_transform=True, scale=True):
+    def normalize_vectors_sctransform(self, use_expanded_vectors=False, normalize_vf=True):
         """
-        nomalize_vectors(norm = "l1", use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
-            Normalize vectors using scipy.preprocessing.normalization
+        nomalize_vectors_rnb(use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
+            Normalize and regularize vectors using SCtransform
+        """
+        if use_expanded_vectors:
+            vec = np.array(self.dataset.expanded_vectors, copy=True)
+        else:
+            vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
+        
+        norm_vec, fit_params = run_sctransform(vec)
+        self.dataset.normalized_vectors = np.array(norm_vec)
+        
+        if normalize_vf:
+            vf_nonzero = self.dataset.vf[self.dataset.vf_norm > 0]
+            nvec = vf_nonzero.shape[0]
+            fit_params = np.array(fit_params).T
+            regressor_data = np.ones([nvec, 2])
+            regressor_data[:, 1] = np.log10(np.sum(vf_nonzero, axis=1))
+            
+            mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
+            with np.errstate(divide='ignore', invalid='ignore'):
+                res = (vf_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
+            self.dataset.normalized_vf = np.zeros_like(self.dataset.vf)
+            self.dataset.normalized_vf[self.dataset.vf_norm > 0] = np.nan_to_num(res)
+        return
+    
+    def normalize_vectors(self, use_expanded_vectors=False, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
+        """
+        nomalize_vectors(use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
+            Normalize and regularize vectors
             
             Parameters
             ----------
-            norm : string (default: "l1")
-                Type of norm for normalization. 
             use_expanded_vectors : bool (default: False)
                 If True, use averaged vectors nearby local maxima of the vector field.
             normalize_gene: bool (default: True)
@@ -481,27 +540,70 @@ class SSAMAnalysis(object):
             log_transform: bool (default: True)
                 If True, vectors are log transformed.
             scale: bool (default: True)
-                if True, vectors are z-scaled (mean centered and scaled by stdev).
+                If True, vectors are z-scaled (mean centered and scaled by stdev).
         """
         if use_expanded_vectors:
             vec = np.array(self.dataset.expanded_vectors, copy=True)
         else:
             vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
         if normalize_gene:
-            vec = preprocessing.normalize(vec, norm=norm, axis=0) # Normalize per gene
+            vec = preprocessing.normalize(vec, norm=norm, axis=0) * size_after_normalization  # Normalize per gene
         if normalize_vector:
-            vec = preprocessing.normalize(vec, norm=norm, axis=1) # Normalize per vector
+            vec = preprocessing.normalize(vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
+        if normalize_median:
+            def n(v):
+                s, m = np.sum(v, axis=1), np.median(v, axis=1)
+                s[m > 0] = s[m > 0] / m[m > 0]
+                s[m == 0] = 0
+                v[s > 0] = v[s > 0] / s[s > 0][:, np.newaxis]
+                v[v == 0] = 0
+                return v
+            vec = n(vec)
         if log_transform:
             vec = np.log2(vec + 1)
         if scale:
-            ds.gene_means = np.mean(ds.normalized_vectors, axis=0)
-            ds.gene_stds = np.std(ds.normalized_vectors, axis=0)
-            vec = (vec - ds.gene_means) / ds.gene_stds
-            #vec = preprocessing.scale(vec)
+            vec = preprocessing.scale(vec)
         self.dataset.normalized_vectors = vec
         return
     
-    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.8, prune=1.0/15.0, snn_neighbors=30, metric="euclidean", subclustering=False, random_state=0):
+    def __correct_cluster_labels(self, cluster_labels, centroid_correction_threshold):
+        new_labels = np.array(cluster_labels, copy=True)
+        if centroid_correction_threshold < 1.0:
+            for cidx in np.unique(cluster_labels):
+                if cidx == -1:
+                    continue
+                prev_midx = -1
+                while True:
+                    vecs = self.dataset.normalized_vectors[new_labels == cidx]
+                    vindices = np.where(new_labels == cidx)[0]
+                    midx = vindices[np.argmin(np.sum(cdist(vecs, vecs), axis=0))]
+                    if midx == prev_midx:
+                        break
+                    prev_midx = midx
+                    m = self.dataset.normalized_vectors[midx]
+                    for vidx, v in zip(vindices, vecs):
+                        if corr(v, m) < centroid_correction_threshold:
+                            new_labels[vidx] = -1
+        return new_labels
+
+    def __calc_centroid(self, cluster_labels):
+        centroids = []
+        centroids_stdev = []
+        #medoids = []
+        for lbl in sorted(list(set(cluster_labels))):
+            if lbl == -1:
+                continue
+            cl_vecs = self.dataset.normalized_vectors[cluster_labels == lbl, :]
+            #cl_dists = scipy.spatial.distance.cdist(cl_vecs, cl_vecs, metric)
+            #medoid = cl_vecs[np.argmin(np.sum(cl_dists, axis=0))]
+            centroid = np.mean(cl_vecs, axis=0)
+            centroid_stdev = np.std(cl_vecs, axis=0)
+            #medoids.append(medoid)
+            centroids.append(centroid)
+            centroids_stdev.append(centroid_stdev)
+        return centroids, centroids_stdev#, medoids
+
+    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=0.89, metric="euclidean", subclustering=False, centroid_correction_threshold=0.8, random_state=0):
         """
         cluster_vectors(method = "louvain", **kwargs)
             Cluster the given vectors using the specified clustering method.
@@ -527,7 +629,7 @@ class SSAMAnalysis(object):
         """
         
         vecs_normalized = self.dataset.normalized_vectors
-        vecs_normalized_dimreduced = PCA(n_components=pca_dims).fit_transform(vecs_normalized)
+        vecs_normalized_dimreduced = PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
 
         def cluster_vecs(vecs):
             k = min(snn_neighbors, vecs.shape[0])
@@ -575,28 +677,90 @@ class SSAMAnalysis(object):
                     all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
                     global_lbl_idx += 1
         else:
-            all_lbls = cluster_vecs(vecs_normalized_dimreduced)
-        
-        centroids = []
-        medoids = []
-        for lbl in sorted(list(set(all_lbls))):
-            if lbl == -1:
-                continue
-            cl_vecs = vecs_normalized[all_lbls == lbl, :]
-            cl_dists = scipy.spatial.distance.cdist(cl_vecs, cl_vecs, metric)
-            medoid = cl_vecs[np.argmin(np.sum(cl_dists, axis=0))]
-            centroid = np.mean(cl_vecs, axis=0)
-            medoids.append(medoid)
-            centroids.append(centroid)
-            
-        self.dataset.centroids = np.array(centroids)
-        self.dataset.medoids = np.array(medoids)
+            all_lbls = cluster_vecs(vecs_normalized_dimreduced)            
+                
+        new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
+        centroids, centroids_stdev = self.__calc_centroid(new_labels)
+
+        merge_candidates = []
+        if max_correlation < 1.0:
+            Z = scipy.cluster.hierarchy.linkage(centroids, metric='correlation')
+            clbls = scipy.cluster.hierarchy.fcluster(Z, 1 - max_correlation, 'distance')
+            for i in set(clbls):
+                leaf_indices = np.where(clbls == i)[0]
+                if len(leaf_indices) > 1:
+                    merge_candidates.append(leaf_indices)
+            removed_indices = []
+            for cand in merge_candidates:
+                for i in cand[1:]:
+                    all_lbls[all_lbls == i] = cand[0]
+                    removed_indices.append(i)
+            for i in sorted(removed_indices, reverse=True):
+                all_lbls[all_lbls > i] -= 1
+
+            new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
+            centroids, centroids_stdev = self.__calc_centroid(new_labels)
+                
         self.dataset.cluster_labels = all_lbls
+        self.dataset.filtered_cluster_labels = new_labels
+        self.dataset.centroids = np.array(centroids)
+        self.dataset.centroids_stdev = np.array(centroids_stdev)
+        #self.dataset.medoids = np.array(medoids)
+        
+        self.__m__("Found %d clusters"%len(centroids))
         return
 
-    def map_celltypes(self, centroids=None, use_medoids=False, min_r=0.6, min_norm="otsu", filter_params={}, min_blob_area=75, log_transform=True):
+    def exclude_and_merge_clusters(self, exclude=[], merge=[], centroid_correction_threshold=0.8):
         """
-        map_celltypes(centroids = None, min_r = 0.6, log_transform = False)
+        exclude_and_merge_clusters(exclude, merge)
+            Exclude bad clusters (including the vectors in the clusters), and merge similar clusters for the downstream analysis.
+
+            Parameters
+            ----------
+            exclude: list(int)
+                List of cluster indices to be excluded.
+            merge: np.array(np.array(int)) or list(list(int))
+                List of list of cluster indices to be merged.
+        """
+        exclude = list(exclude)
+        merge = np.array(merge)
+        for centroids in merge:
+            centroids = np.unique(centroids)
+            for centroid in centroids[1:][::-1]:
+                self.dataset.cluster_labels[self.dataset.cluster_labels == centroid] = centroids[0]
+                exclude.append(centroid)
+        exclude = sorted(exclude)
+        
+        mask = np.ones(len(self.dataset.centroids), np.bool)
+        mask[exclude] = False
+
+        #self.dataset.centroids = self.dataset.centroids[mask]
+        #self.dataset.centroids_stdev = self.dataset.centroids_stdev[mask]
+        #self.dataset.medoids = self.dataset.medoids[mask]
+
+        mask = np.ones(len(self.dataset.cluster_labels), np.bool)
+        for centroid in exclude:
+            # There will be no vectors for already merged centroids - so there is no problem
+            mask[np.array(self.dataset.cluster_labels) == centroid] = False
+        self.dataset.cluster_labels = self.dataset.cluster_labels[mask]
+        self.dataset.local_maxs = tuple([lm[mask] for lm in self.dataset.local_maxs])
+        
+        for centroid in exclude[::-1]:
+            self.dataset.cluster_labels[self.dataset.cluster_labels > centroid] -= 1
+        self.dataset.normalized_vectors = self.dataset.normalized_vectors[mask, :]
+        
+        new_labels = self.__correct_cluster_labels(self.dataset.cluster_labels, centroid_correction_threshold)
+        centroids, centroids_stdev = self.__calc_centroid(new_labels)
+        
+        self.dataset.centroids = centroids
+        self.dataset.centroids_stdev = centroids_stdev
+        self.dataset.filtered_cluster_labels = new_labels
+        
+        return
+
+    def map_celltypes(self, centroids=None):
+        """
+        map_celltypes(centroids = None)
             Create correlation maps between the centroids and the vector field.
             Each correlation map corresponds each cell type's image map.
 
@@ -604,99 +768,88 @@ class SSAMAnalysis(object):
             ----------
             centroids: np.array(float) or list(np.array(float)), default: None
                 If given, map celltypes with the given cluster centroids. Ignore 'use_medoids' parameter.
-            use_medoids: bool, default: False
-                Map cluster medoids instead of centroids.
-            min_r: float, default: 0.6
-                Threshold for mimimum Pearson's correlation coefficient between the centroids and the vector field.
-            log_transform: bool, default: True
-                Log transform vector field before calculating correlation.
         """
         
-        celltype_maps = []
+        if self.dataset.normalized_vf is None:
+            normalized_vf = self.dataset.vf
+        else:
+            normalized_vf = self.dataset.normalized_vf
+
         if centroids is None:
             centroids = self.dataset.centroids
-        if isinstance(min_norm, str):
-            filter_offset = filter_params.pop('offset', 0)
-        for centroid in centroids:
-            ctmap = calc_ctmap(centroid, self.dataset.vf, self.ncores, log_transform)
-            ctmap[ctmap < min_r] = 0
+        else:
+            self.dataset.centroids = centroids
             
-            if isinstance(min_norm, str):
-                if min_norm in ["local", "niblack", "sauvola", "localotsu"]:
-                    im = np.zeros_like(self.dataset.vf_norm)
-                    im[ctmap > min_r] = self.dataset.vf_norm[ctmap > min_r]
-                if min_norm == "localotsu":
-                    max_norm = np.max(im)
-                    im /= max_norm
-                    selem = disk(filter_params['radius'])
-                    min_norm_cut = filters.rank.otsu(im, selem) * max_norm
-                else:
-                    filter_func = getattr(filters, "threshold_" + min_norm)
-                    if min_norm in ["local", "niblack", "sauvola"]:
-                        min_norm_cut = filter_func(im, **filter_params)
-                    else:
-                        highr_norm = self.dataset.vf_norm[ctmap > min_r]
-                        #sigma = np.std(highr_norm)
-                        if len(highr_norm) == 0 or np.max(highr_norm) == np.min(highr_norm):
-                            min_norm_cut = np.max(vf_norm)
-                        else:
-                            min_norm_cut = filter_func(highr_norm, **filter_params)
-                min_norm_cut -= filter_offset
-            else:
-                min_norm_cut = min_norm
-            ctmap[self.dataset.vf_norm < min_norm_cut] = 0
-            if min_blob_area > 0:
-                mask = ctmap > 0
-                blob_labels = measure.label(mask, background=0)
-                for bp in measure.regionprops(blob_labels):
-                    if len(bp.bbox) == 4:
-                        minr, minc, maxr, maxc = bp.bbox
-                        if bp.filled_area < min_blob_area:
-                            for c in bp.coords:
-                                mask[c[0], c[1]] = 0
-                            continue
-                        if bp.area != bp.filled_area:
-                            mask[minr:maxr, minc:maxc] |= bp.filled_image
-                    else:
-                        minr, minc, minz, maxr, maxc, maxz = bp.bbox
-                        if bp.filled_area < min_blob_area:
-                            for c in bp.coords:
-                                mask[c[0], c[1], c[2]] = 0
-                            continue
-                        if bp.area != bp.filled_area:
-                            mask[minr:maxr, minc:maxc, minz:maxz] |= bp.filled_image
-                ctmap[~mask] = 0
-            celltype_maps.append(sparse.COO(np.where(ctmap > 0), ctmap[ctmap > 0], shape=ctmap.shape))
-        
-        newaxis = 3 if self.dataset.is3d else 2
-        stacked_ctmaps = sparse.stack(celltype_maps, axis=newaxis)
-        #self.dataset.max_corr = np.zeros_like(self.dataset.vf_norm)
-        #self.dataset.max_corr_idx = np.zeros_like(self.dataset.vf_norm, dtype='int')
-        #if newaxis == 2:
-        #    for i in range(stacked_ctmaps.shape[0]):
-        #        for j in range(stacked_ctmaps.shape[1]):
-        #            corr_vec = stacked_ctmaps[i, j, :].todense()
-        #            max_corr_vec_idx = np.argmax(corr_vec)
-        #            max_corr_vec = corr_vec[max_corr_vec_idx]
-        #            self.dataset.max_corr_idx[i, j] = max_corr_vec_idx
-        #            self.dataset.max_corr[i, j] = max_corr_vec
-        #else:
-        #    for i in range(stacked_ctmaps.shape[0]):
-        #        for j in range(stacked_ctmaps.shape[1]):
-        #            for k in range(stacked_ctmaps.shape[2]):
-        #                corr_vec = stacked_ctmaps[i, j, k, :]
-        #                max_corr_vec_idx = np.argmax(corr_vec)
-        #                max_corr_vec = corr_vec[max_corr_vec_idx]
-        #                self.dataset.max_corr_idx[i, j, k] = max_corr_vec_idx
-        #                self.dataset.max_corr[i, j, k] = max_corr_vec
-        self.dataset.max_corr = np.max(stacked_ctmaps, axis=newaxis).todense()
-        
-        # TODO: This uses too much memory
-        self.dataset.max_corr_idx = np.argmax(stacked_ctmaps.todense(), axis=newaxis)
-        
-        self.dataset.celltype_maps = celltype_maps
+        max_corr = np.zeros_like(self.dataset.vf_norm) - 1 # range from -1 to +1
+        max_corr_idx = np.zeros_like(self.dataset.vf_norm, dtype=int) - 1 # -1 for background
+        for cidx, centroid in enumerate(centroids):
+            ctmap = calc_ctmap(centroid, normalized_vf, self.ncores)
+            ctmap = np.nan_to_num(ctmap)
+            mask = max_corr < ctmap
+            max_corr[mask] = ctmap[mask]
+            max_corr_idx[mask] = cidx
+        self.dataset.max_correlations = max_corr
+        self.dataset.celltype_maps = max_corr_idx
         return
 
+    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=100, filter_params={}):
+        if isinstance(min_norm, str):
+            # filter_params dict will be used for kwd params for filter_* functions.
+            # some functions doesn't support param 'offset', therefore temporariliy remove it from here
+            filter_offset = filter_params.pop('offset', 0)
+        
+        filtered_ctmaps = np.zeros_like(self.dataset.celltype_maps) - 1
+        mask = np.zeros_like(self.dataset.vf_norm, dtype=bool)
+        for cidx in range(len(self.dataset.centroids)):
+            ctcorr = self.dataset.get_celltype_correlation(cidx)
+            if isinstance(min_norm, str):
+                for z in range(self.dataset.shape[2]):
+                    if min_norm in ["local", "niblack", "sauvola", "localotsu"]:
+                        im = np.zeros(self.dataset.vf_norm.shape[:-1])
+                        im[ctcorr[..., z] > min_r] = self.dataset.vf_norm[..., z][ctcorr[..., z] > min_r]
+                    if min_norm == "localotsu":
+                        max_norm = np.max(im)
+                        im /= max_norm
+                        selem = disk(filter_params['radius'])
+                        min_norm_cut = filters.rank.otsu(im, selem) * max_norm
+                    else:
+                        filter_func = getattr(filters, "threshold_" + min_norm)
+                        if min_norm in ["local", "niblack", "sauvola"]:
+                            min_norm_cut = filter_func(im, **filter_params)
+                        else:
+                            highr_norm = self.dataset.vf_norm[..., z][ctcorr[..., z] > min_r]
+                            #sigma = np.std(highr_norm)
+                            if len(highr_norm) == 0 or np.max(highr_norm) == np.min(highr_norm):
+                                min_norm_cut = np.max(self.dataset.vf_norm)
+                            else:
+                                min_norm_cut = filter_func(highr_norm, **filter_params)
+                    min_norm_cut += filter_offset # manually apply filter offset
+                    mask[..., z][np.logical_and(self.dataset.vf_norm[..., z] > min_norm_cut, ctcorr[..., z] > min_r)] = 1
+            else:
+                mask[np.logical_and(self.dataset.vf_norm > min_norm, ctcorr > min_r)] = 1
+
+            if min_blob_area > 0 or fill_blobs:
+                blob_labels = measure.label(mask, background=0)
+                for bp in measure.regionprops(blob_labels):
+                    if min_blob_area > 0 and bp.filled_area < min_blob_area:
+                        for c in bp.coords:
+                            mask[c[0], c[1], c[2]] = 0 # fill with zeros
+                            #mask[c[0], c[1]] = 0 # fill with zeros
+                        continue
+                    if fill_blobs and bp.area != bp.filled_area:
+                        minx, miny, minz, maxx, maxy, maxz = bp.bbox
+                        mask[minx:maxx, miny:maxy, minz:maxz] |= bp.filled_image
+                        #minr, minc, maxr, maxc = bp.bbox
+                        #mask[minr:maxr, minc:maxc] |= bp.filled_image
+                
+            filtered_ctmaps[np.logical_and(mask == 1, np.logical_or(self.dataset.celltype_maps == -1, self.dataset.celltype_maps == cidx))] = cidx
+        
+        if isinstance(min_norm, str):
+            # restore offset param
+            filter_params['offset'] = filter_offset
+
+        self.dataset.filtered_celltype_maps = filtered_ctmaps
+    
     def run_full_analysis_with_defaults(self):
         """
         run_full_analysis_with_defaults()
