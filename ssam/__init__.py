@@ -517,7 +517,7 @@ class SSAMAnalysis(object):
 
         maxdist=int(bandwidth*4)
 
-        with closing(Pool(n_cores)) as p:
+        with closing(Pool(n_cores, maxtasksperchild=1)) as p:
 
             idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
             
