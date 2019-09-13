@@ -14,6 +14,8 @@ from scipy import ndimage
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from umap import UMAP
+from multiprocessing import Pool
+from contextlib import closing
 #from scipy.stats import pearsonr
 from tempfile import mkdtemp, TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
@@ -32,6 +34,53 @@ from sklearn.cluster import AgglomerativeClustering
 from PIL import Image
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
+
+
+def calc_slice(args):
+    
+    (gidx, maxdist, bandwidth, save_dir, gene_name, shape, locations, re_run, sampling_distance) = args
+        
+    #bandwidth = 1#bandwidth**0.5
+    span = np.linspace(-maxdist,maxdist,maxdist*2+1)
+    X,Y = np.meshgrid(span,span)#,[0])
+    
+    def create_kernel(x,y,z,X=X,Y=Y,span=span):#,Z=Z):
+        X_=(-x+X)/bandwidth
+        Y_=(-y+Y)/bandwidth
+#        Z_=(z-Z)/bandwidth        
+        return np.exp(-0.5*(X_**2+Y_**2))#+Z_**2))  
+    
+    print('Processing gene %s'%gene_name, gidx )
+
+    pdf_filename = os.path.join(save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+        ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+        ('%f' % bandwidth).rstrip('0').rstrip('.'),
+        gene_name)
+    )            
+      
+    if not os.path.exists(pdf_filename) or re_run:  
+       
+        vf_slice = np.zeros([s+2*maxdist for s in shape[:2]])
+        
+        for n_dp,[x,y,z] in enumerate(locations):
+            int_x,int_y = (int(x)+maxdist,int(y)+maxdist)
+            rem_x,rem_y = (x%1,y%1)
+            
+            kernel = create_kernel(rem_x,rem_y,0)
+                
+            x_ = int_x-maxdist
+            y_ = int_y-maxdist
+            _x = int_x+maxdist+1
+            _y = int_y+maxdist+1
+            
+            vf_slice[x_:_x,y_:_y]+=kernel.squeeze().T
+        
+        pdf = vf_slice[maxdist:-maxdist,maxdist:-maxdist]
+        
+        pdf/=pdf.sum()
+        
+        np.save(pdf_filename, pdf)
+    
 
 def run_sctransform(data):
     with TemporaryDirectory() as tmpdirname:
@@ -453,6 +502,43 @@ class SSAMAnalysis(object):
             vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
         self.dataset.vf = vf
         return
+   
+    def run_kde_fast(self, bandwidth=2.0, sampling_distance=1.0, re_run=False, n_cores=5):
+        '''
+            kernel : string, optional
+                Kernel for density estimation.
+            bandwidth : float, optional
+                Parameter to adjust width of kernel.
+                Set it 2 to make FWHM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
+            sampling_distance : float, optional
+                Grid spacing in um.
+        '''
+
+
+        maxdist=int(bandwidth*4)
+
+        with closing(Pool(n_cores)) as p:
+
+            idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
+            
+            self.dataset.vf = np.zeros(self.dataset.shape[:2]+(len(idcs),))
+    
+            p.map(calc_slice,[(gidx, maxdist, bandwidth, self.save_dir, 
+                                   self.dataset.genes[gidx], self.dataset.shape, 
+                                   self.dataset.locations[gidx], re_run,
+                                   sampling_distance) for gidx in idcs])
+    
+            p.close()
+            p.join()
+        
+        for gidx,gene in enumerate(self.dataset.genes):
+            pdf_filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+                ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+                ('%f' % bandwidth).rstrip('0').rstrip('.'),
+                gene)
+            )
+            self.dataset.vf[...,gidx] = np.load(pdf_filename)            
+            
 
     def calc_correlation_map(self, corr_size=3):
         """
@@ -1065,6 +1151,6 @@ if __name__ == "__main__":
     
     dataset = SSAMDataset(selected_genes, [pos_dic[gene] for gene in selected_genes], width, height, depth)
     analysis = SSAMAnalysis(dataset, save_dir="/media/pjb7687/data/ssam_test2", verbose=True)
-    analysis.run_kde()
+    analysis.run_kde_fast()
     analysis.find_localmax()
     analysis.expand_localmax()
