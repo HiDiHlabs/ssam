@@ -28,6 +28,8 @@ from matplotlib.colors import ListedColormap
 import pickle
 import subprocess
 from scipy.spatial.distance import cdist
+from sklearn.cluster import AgglomerativeClustering
+from PIL import Image
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
@@ -93,6 +95,7 @@ class SSAMDataset(object):
         self.umap = None
         self.normalized_vf = None
         self.excluded_clusters = None
+        self.celltype_binned_counts = None
 
     @property
     def vf(self):
@@ -198,7 +201,7 @@ class SSAMDataset(object):
         else:
             plt.scatter(self.umap[:, 0], self.umap[:, 1], s=s, c=cols, cmap=cmap)
         return
-
+    
     def plot_expanded_mask(self, cmap='Greys'): # TODO
         plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap)
         return
@@ -252,6 +255,46 @@ class SSAMDataset(object):
             plt.gca().invert_yaxis()
 
         return
+
+    def plot_inferred_regions(self, background='white', colors=None, cmap='jet', rotate=0, plot_regions=False, regions_alpha=0.3, plot_cells=True, z=None):
+        if z is None:
+            z = int(self.shape[2] / 2)
+        
+        inferred_regions = self.inferred_regions
+        inferred_regions_cells = self.inferred_regions_cells
+        
+        if rotate == 1 or rotate == 3:
+            inferred_regions = inferred_regions.swapaxes(0, 1)
+            inferred_regions_cells = inferred_regions_cells.swapaxes(0, 1)
+            
+        if colors is None:
+            cmap_internal = plt.get_cmap(cmap)
+            colors_regions = cmap_internal(np.linspace(0, 1, np.max(inferred_regions) + 1))
+            colors_cells = cmap_internal(np.linspace(0, 1, np.max(inferred_regions) + 1))
+            
+        colors_regions[:, 3] = regions_alpha
+        if -1 in inferred_regions:
+            colors_regions = [[0, 0, 0, 0]] + list(colors_regions)
+        if -1 in inferred_regions_cells:
+            colors_cells = [[0, 0, 0, 0]] + list(colors_cells)
+            
+        plt.gca().set_facecolor(background)
+        if plot_regions:
+            plt.imshow(inferred_regions[..., z], cmap=ListedColormap(colors_regions))
+        plt.imshow(inferred_regions_cells[..., z], cmap=ListedColormap(colors_cells))
+        
+        if rotate == 1:
+            plt.gca().invert_xaxis()
+        elif rotate == 2:
+            plt.gca().invert_xaxis()
+            plt.gca().invert_yaxis()
+        elif rotate == 3:
+            plt.gca().invert_yaxis()
+            
+        return
+    
+    def plot_spatial_relationships(self, cluster_labels, *args, **kwargs):
+        sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)
 
 class SSAMAnalysis(object):
     def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
@@ -849,7 +892,159 @@ class SSAMAnalysis(object):
             filter_params['offset'] = filter_offset
 
         self.dataset.filtered_celltype_maps = filtered_ctmaps
-    
+        
+    def bin_celltypemaps(self, step=10, radius=100):
+        def make_sphere_mask(radius):
+            dia = radius*2+1
+            X, Y, Z = np.ogrid[:dia, :dia, :dia]
+            dist_from_center = np.sqrt((X - radius)**2 + (Y - radius)**2 + (Z - radius)**2)
+            mask = dist_from_center <= radius
+            return mask
+
+        centers = np.array(self.dataset.vf_norm.shape) // 2
+        steps = np.array(np.floor(centers / step) * 2 + np.array(self.dataset.vf_norm.shape) % 2, dtype=int)
+        starts = centers - step * np.floor(centers / step)
+        ends = starts + steps * step
+        X, Y, Z = [np.arange(s, e, step, dtype=int) for s, e in zip(starts, ends)]
+
+        ct_centers = np.zeros([len(X), len(Y), len(Z)], dtype=int)
+        ct_counts = np.zeros([len(X), len(Y), len(Z), len(self.dataset.centroids)], dtype=int)
+
+        ncelltypes = np.max(self.dataset.filtered_celltype_maps) + 1
+        cnt_matrix = np.zeros([ncelltypes, ncelltypes])
+        sphere_mask = make_sphere_mask(radius)
+
+        for xidx, x in enumerate(X):
+            for yidx, y in enumerate(Y):
+                for zidx, z in enumerate(Z):
+                    mask_slices = [slice(0, radius*2+1), slice(0, radius*2+1), slice(0, radius*2+1)]
+                    s = [x - radius,     y - radius,     z - radius    ]
+                    e = [x + radius + 1, y + radius + 1, z + radius + 1]
+
+                    for ms_idx, ms in enumerate(s):
+                        if ms < 0:
+                            mask_slices[ms_idx] = slice(abs(ms), mask_slices[ms_idx].stop)
+                            s[ms_idx] = 0
+                    for me_idx, me in enumerate(e):
+                        ctmap_size = self.dataset.filtered_celltype_maps.shape[me_idx]
+                        #ctmap_size = 50
+                        if me > ctmap_size:
+                            mask_slices[me_idx] = slice(mask_slices[me_idx].start, (radius * 2 + 1) + ctmap_size - me)
+                            e[me_idx] = ctmap_size
+
+                    w = self.dataset.filtered_celltype_maps[s[0]:e[0],
+                                                            s[1]:e[1],
+                                                            s[2]:e[2]][sphere_mask[tuple(mask_slices)]] + 1
+
+                    ct_centers[xidx, yidx, zidx] = self.dataset.filtered_celltype_maps[x, y, z]
+                    ct_counts[xidx, yidx, zidx] = np.bincount(np.ravel(w), minlength=len(self.dataset.centroids) + 1)[1:]
+                    
+        self.dataset.celltype_binned_centers = ct_centers
+        self.dataset.celltype_binned_counts = ct_counts
+        return
+        
+    def regionalize(self, centroid_indices=[], n_clusters=10, norm_thres=0, merge_thres=0.6, merge_remote=True):
+        if self.dataset.celltype_binned_counts is None:
+            raise AssertionError("Run 'bin_celltypemap()' method first!")
+
+        if len(centroid_indices) > 0:
+            binned_ctmaps = self.dataset.celltype_binned_counts[..., centroid_indices]
+        else:
+            binned_ctmaps = self.dataset.celltype_binned_counts
+
+        binned_ctmaps_norm = np.sum(binned_ctmaps, axis=3)
+
+        ctvf_vecs = binned_ctmaps[binned_ctmaps_norm > norm_thres]
+        ctvf_vecs_normalized = preprocessing.normalize(ctvf_vecs, norm='l1', axis=1)
+
+        clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward', affinity='euclidean').fit(ctvf_vecs_normalized)
+        labels_predicted = clustering.labels_ + 1
+        
+        layer_map = np.zeros(binned_ctmaps_norm.shape)
+        layer_map[binned_ctmaps_norm > norm_thres] = labels_predicted
+        layer_map = measure.label(layer_map)
+        
+        if merge_thres < 1.0:
+            while True:
+                uniq_labels = np.array(list(set(list(np.ravel(layer_map))) - set([0])))
+                if not merge_remote:
+                    layer_map_padded = np.pad(layer_map, 1, mode='constant', constant_values=0)
+                    neighbors_dic = {}
+                    for lbl in uniq_labels:
+                        neighbors = set()
+                        for x, y, z in zip(*np.where(layer_map_padded == lbl)):
+                            neighbors.add(layer_map_padded[x - 1, y    , z    ])
+                            neighbors.add(layer_map_padded[x + 1, y    , z    ])
+                            neighbors.add(layer_map_padded[x    , y - 1, z    ])
+                            neighbors.add(layer_map_padded[x    , y + 1, z    ])
+                            neighbors.add(layer_map_padded[x    , y    , z - 1])
+                            neighbors.add(layer_map_padded[x    , y    , z + 1])
+                            neighbors.add(layer_map_padded[x - 1, y - 1, z    ])
+                            neighbors.add(layer_map_padded[x + 1, y - 1, z    ])
+                            neighbors.add(layer_map_padded[x - 1, y + 1, z    ])
+                            neighbors.add(layer_map_padded[x + 1, y + 1, z    ])
+                            neighbors.add(layer_map_padded[x - 1, y    , z - 1])
+                            neighbors.add(layer_map_padded[x + 1, y    , z - 1])
+                            neighbors.add(layer_map_padded[x - 1, y    , z + 1])
+                            neighbors.add(layer_map_padded[x + 1, y    , z + 1])
+                            neighbors.add(layer_map_padded[x    , y - 1, z - 1])
+                            neighbors.add(layer_map_padded[x    , y + 1, z - 1])
+                            neighbors.add(layer_map_padded[x    , y - 1, z + 1])
+                            neighbors.add(layer_map_padded[x    , y + 1, z + 1])
+                            neighbors.add(layer_map_padded[x - 1, y - 1, z - 1])
+                            neighbors.add(layer_map_padded[x + 1, y - 1, z - 1])
+                            neighbors.add(layer_map_padded[x - 1, y - 1, z + 1])
+                            neighbors.add(layer_map_padded[x + 1, y - 1, z + 1])
+                            neighbors.add(layer_map_padded[x - 1, y + 1, z - 1])
+                            neighbors.add(layer_map_padded[x + 1, y + 1, z - 1])
+                            neighbors.add(layer_map_padded[x - 1, y + 1, z + 1])
+                            neighbors.add(layer_map_padded[x + 1, y + 1, z + 1])
+                        neighbors_dic[lbl] = neighbors
+                cluster_centroids = []
+                for lbl in uniq_labels:
+                    cluster_centroids.append(np.mean(binned_ctmaps[layer_map == lbl], axis=0))
+                max_corr = 0
+                #max_corr_indices = (0, 0, )
+                for i in range(len(uniq_labels)):
+                    for j in range(i+1, len(uniq_labels)):
+                        lbl_i, lbl_j = uniq_labels[i], uniq_labels[j]
+                        if lbl_i == 0 or lbl_j == 0:
+                            continue
+                        corr_ij = corr(cluster_centroids[i], cluster_centroids[j])
+                        if corr_ij > max_corr and (merge_remote or lbl_j in neighbors_dic[lbl_i]):
+                            max_corr = corr_ij
+                            max_corr_indices = (lbl_i, lbl_j, )
+                if max_corr > merge_thres:
+                    layer_map[layer_map == max_corr_indices[1]] = max_corr_indices[0]
+                else:
+                    break
+        
+        uniq_labels = sorted(set(list(np.ravel(layer_map))) - set([0]))
+        for i, lbl in enumerate(uniq_labels, start=1):
+            layer_map[layer_map == lbl] = i
+
+        resized_layer_map = np.zeros_like(self.dataset.filtered_celltype_maps, dtype=int)
+        for z in range(self.dataset.shape[-1]):
+            im = Image.fromarray(np.array(layer_map[..., z], dtype='int8'))
+            resized_layer_map[..., z] = np.array(im.resize([self.dataset.shape[1], self.dataset.shape[0]], Image.NEAREST)) - 1
+        resized_layer_map2 = np.array(resized_layer_map, copy=True)
+        resized_layer_map2[self.dataset.filtered_celltype_maps == -1] = -1
+
+        self.dataset.inferred_regions = resized_layer_map
+        self.dataset.inferred_regions_cells = resized_layer_map2
+        
+    def calc_spatial_relationship(self):
+        if self.dataset.celltype_binned_counts is None:
+            raise AssertionError("Run 'bin_celltypemap()' method first!")
+            
+        ct_centers = self.dataset.celltype_binned_centers
+        
+        sparel = np.zeros([len(self.dataset.centroids), len(self.dataset.centroids)])
+        for idx in np.unique(ct_centers):
+            sparel[idx, :] = np.sum(self.dataset.celltype_binned_counts[ct_centers == idx], axis=0)
+
+        self.dataset.spatial_relationships = preprocessing.normalize(sparel, axis=1, norm='l1')
+        
     def run_full_analysis_with_defaults(self):
         """
         run_full_analysis_with_defaults()
