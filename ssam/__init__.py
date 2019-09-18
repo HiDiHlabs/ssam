@@ -210,12 +210,12 @@ class SSAMDataset(object):
             good_vecs = self.normalized_vectors
         return PCA(n_components=pca_dims, random_state=random_state).fit_transform(good_vecs)
         
-    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet"):
+    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", tsne_kwargs={}):
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_tsne or self.tsne is None:
             pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
-            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
+            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state, **tsne_kwargs).fit_transform(pcs[:, :pca_dims])
         if self.filtered_cluster_labels is not None:
             cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
         else:
@@ -229,17 +229,14 @@ class SSAMDataset(object):
             plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
         return
 
-    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet"):
+    def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", umap_kwargs={}):
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_umap or self.umap is None:
             pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
-            self.umap = UMAP(metric=metric, random_state=random_state).fit_transform(pcs[:, :pca_dims])
+            self.umap = UMAP(metric=metric, random_state=random_state, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
         if self.filtered_cluster_labels is not None:
-            if exclude_bad_clusters:
-                cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
-            else:
-                cols = self.filtered_cluster_labels
+            cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
         else:
             cols = None
         if len(colors) > 0:
