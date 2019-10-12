@@ -22,7 +22,6 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/eilslabs/ssam",
     packages=setuptools.find_packages(),
-    data_files=[("ssam/multivol", glob("vispy-multivol/multivol/*.py"))],
     classifiers=[
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
