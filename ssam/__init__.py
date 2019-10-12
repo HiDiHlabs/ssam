@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
 import seaborn as sns
 import multiprocessing
 import os
@@ -16,7 +17,6 @@ from sklearn.manifold import TSNE
 from umap import UMAP
 from multiprocessing import Pool
 from contextlib import closing
-#from scipy.stats import pearsonr
 from tempfile import mkdtemp, TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
@@ -32,9 +32,9 @@ import subprocess
 from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
 from PIL import Image
+from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
-
 
 def calc_slice(args):
     
@@ -82,12 +82,17 @@ def calc_slice(args):
         np.save(pdf_filename, pdf)
     
 
-def run_sctransform(data):
+def run_sctransform(data, **kwargs):
+    vst_options = ['%s = "%s"'%(k, v) if type(v) is str else '%s = %s'%(k, v) for k, v in kwargs.items()]
+    if len(vst_options) == 0:
+        vst_opt_str = ''
+    else:
+        vst_opt_str = ', ' + ', '.join(vst_options)
     with TemporaryDirectory() as tmpdirname:
         ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
         df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
         df.to_feather(ifn)
-        rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat); write_feather(as.data.frame(t(res$y)), "{1}"); write_feather(as.data.frame(res$model_pars_fit), "{2}");'.format(ifn, ofn, pfn)
+        rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         with open(rfn, "w") as f:
             f.write(rcmd)
         subprocess.check_output("Rscript " + rfn, shell=True)
@@ -257,7 +262,7 @@ class SSAMDataset(object):
         plt.colorbar()
         return
     
-    def plot_celltypes_map(self, output_mask=None, background="black", centroid_indices=[], colors=None, cmap='jet', rotate=0, min_r=0.6, set_alpha=True, z=None):
+    def plot_celltypes_map(self, background="black", centroid_indices=[], colors=None, cmap='jet', rotate=0, min_r=0.6, set_alpha=True, z=None):
         if z is None:
             z = int(self.shape[2] / 2)
         num_ctmaps = np.max(self.filtered_celltype_maps) + 1
@@ -276,8 +281,6 @@ class SSAMDataset(object):
         empty_mask = celltype_maps_internal == -1
         celltype_maps_internal[empty_mask] = 0
         sctmap = cmap_internal(celltype_maps_internal)
-        if output_mask is not None:
-            sctmap[~output_mask.astype(bool)] = (0, 0, 0, 0)
         sctmap[empty_mask] = (0, 0, 0, 0)
 
         if set_alpha:
@@ -302,32 +305,32 @@ class SSAMDataset(object):
 
         return
 
-    def plot_inferred_regions(self, background='white', colors=None, cmap='jet', rotate=0, plot_regions=False, regions_alpha=0.3, plot_cells=True, z=None):
+    def plot_domains(self, background='white', colors=None, cmap='jet', rotate=0, domain_background=False, background_alpha=0.3, z=None):
         if z is None:
             z = int(self.shape[2] / 2)
         
-        inferred_regions = self.inferred_regions
-        inferred_regions_cells = self.inferred_regions_cells
+        inferred_domains = self.inferred_domains[..., z]
+        inferred_domains_cells = self.inferred_domains_cells[..., z]
         
         if rotate == 1 or rotate == 3:
-            inferred_regions = inferred_regions.swapaxes(0, 1)
-            inferred_regions_cells = inferred_regions_cells.swapaxes(0, 1)
+            inferred_domains = inferred_domains.swapaxes(0, 1)
+            inferred_domains_cells = inferred_domains_cells.swapaxes(0, 1)
             
         if colors is None:
             cmap_internal = plt.get_cmap(cmap)
-            colors_regions = cmap_internal(np.linspace(0, 1, np.max(inferred_regions) + 1))
-            colors_cells = cmap_internal(np.linspace(0, 1, np.max(inferred_regions) + 1))
+            colors_domains = cmap_internal(np.linspace(0, 1, np.max(inferred_domains) + 1))
+            colors_cells = cmap_internal(np.linspace(0, 1, np.max(inferred_domains_cells) + 1))
             
-        colors_regions[:, 3] = regions_alpha
-        if -1 in inferred_regions:
-            colors_regions = [[0, 0, 0, 0]] + list(colors_regions)
-        if -1 in inferred_regions_cells:
+        colors_domains[:, 3] = background_alpha
+        if -1 in inferred_domains:
+            colors_domains = [[0, 0, 0, 0]] + list(colors_domains)
+        if -1 in inferred_domains_cells:
             colors_cells = [[0, 0, 0, 0]] + list(colors_cells)
             
         plt.gca().set_facecolor(background)
-        if plot_regions:
-            plt.imshow(inferred_regions[..., z], cmap=ListedColormap(colors_regions))
-        plt.imshow(inferred_regions_cells[..., z], cmap=ListedColormap(colors_cells))
+        if domain_background:
+            plt.imshow(inferred_domains, cmap=ListedColormap(colors_domains))
+        plt.imshow(inferred_domains_cells, cmap=ListedColormap(colors_cells))
         
         if rotate == 1:
             plt.gca().invert_xaxis()
@@ -339,9 +342,95 @@ class SSAMDataset(object):
             
         return
     
-    def plot_spatial_relationships(self, cluster_labels, *args, **kwargs):
-        sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)
+    def plot_diagnostic_plot(self, centroid_index, cluster_name=None, cluster_color=None, cmap=None, use_embedding="tsne", known_signatures=[], correlation_methods=[]):
+        p, e = self.centroids[centroid_index], self.centroids_stdev[centroid_index]
+        if cluster_name is None:
+            cluster_name = "Cluster #%d"%centroid_index
+        
+        if cluster_color is None:
+            if cmap is None:
+                cmap = plt.get_cmap("jet")
+            cluster_color = cmap(centroid_index / (len(self.centroids) - 1))
 
+        if len(correlation_methods) == 0:
+            correlation_methods = [("r", corr), ]
+        total_signatures = len(correlation_methods) * len(known_signatures) + 1
+                
+        ax = plt.subplot(1, 4, 1)
+        mask = self.filtered_cluster_labels == centroid_index
+        plt.scatter(self.local_maxs[0][mask], self.local_maxs[1][mask], c=[cluster_color])
+        self.plot_l1norm(rotate=1, cmap="Greys")
+
+        ax = plt.subplot(1, 4, 2)
+        ctmap = np.zeros([self.filtered_celltype_maps.shape[1], self.filtered_celltype_maps.shape[0], 4])
+        ctmap[self.filtered_celltype_maps[..., 0].T == centroid_index] = to_rgba(cluster_color)
+        ctmap[np.logical_and(self.filtered_celltype_maps[..., 0].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
+        ax.imshow(ctmap)
+        plt.xlim([self.celltype_maps.shape[0], 0])
+
+        ax = plt.subplot(total_signatures, 4, 3)
+        ax.bar(self.genes, p, yerr=e)
+        ax.set_title(cluster_name)
+        plt.xlim([-1, len(self.genes)])
+        plt.xticks(rotation=90)
+
+        subplot_idx = 0
+        for signature in known_signatures:
+            sig_title, sig_labels, sig_values = signature[:3]
+            sig_colors_defined = False
+            if len(signature) == 4:
+                sig_colors = signature[3]
+                sig_colors_defined = True
+            for corr_label, corr_func in correlation_methods:
+                corr_results = [corr_func(p, sig_value) for sig_value in sig_values]
+                corr_results = [e[0] if hasattr(e, "__getitem__") else e for e in corr_results]
+                max_corr_idx = np.argmax(corr_results)
+                ax = plt.subplot(total_signatures, 4, 7+subplot_idx*4)
+                lbl = sig_labels[max_corr_idx]
+                if sig_colors_defined:
+                    col = sig_colors[max_corr_idx]
+                else:
+                    col = cluster_color
+                ax.bar(self.genes, sig_values[max_corr_idx], color=col)
+                ax.set_title("%s (max %s: %.3f)"%(lbl, corr_label, corr_results[max_corr_idx]))
+                plt.xlim([-1, len(self.genes)])
+                plt.xticks(rotation=90)
+                subplot_idx += 1
+
+        if use_embedding == 'tsne':
+            embedding = self.tsne
+            fig_title = "t-SNE, %d vectors"%sum(self.filtered_cluster_labels == centroid_index)
+        elif use_embedding == 'umap':
+            embedding = self.umap
+            fig_title = "UMAP, %d vectors"%sum(self.filtered_cluster_labels == centroid_index)
+        good_vectors = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
+        ax = plt.subplot(1, 4, 4)
+        ax.scatter(embedding[:, 0][good_vectors != centroid_index], embedding[:, 1][good_vectors != centroid_index], c=[[0.8, 0.8, 0.8, 1],], s=80)
+        ax.scatter(embedding[:, 0][good_vectors == centroid_index], embedding[:, 1][good_vectors == centroid_index], c=[cluster_color], s=80)
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+        ax.set_title(fig_title)
+        
+    def plot_celltype_composition(self, domain_index, cell_type_colors=None, cell_type_cmap='jet', cell_type_orders=None, label_cutoff=0.03, pctdistance=1.15, **kwarg):
+        if cell_type_colors is None:
+            cmap = plt.get_cmap(cell_type_cmap)
+            cell_type_colors = cmap(np.arange(0, len(self.centroids)) / (len(self.centroids) - 1))
+        
+        if cell_type_orders is not None:
+            ctcs = np.array(cell_type_colors)[cell_type_orders]
+            p = self.inferred_domains_compositions[domain_index][cell_type_orders]
+        else:
+            ctcs = cell_type_colors
+            p = self.inferred_domains_compositions[domain_index]
+        plt.pie(p,
+                colors=ctcs,
+                autopct=lambda e: '%.1f %%'%e if e > 3 else '',
+                pctdistance=pctdistance)
+
+    def plot_spatial_relationships(self, cluster_labels, *args, **kwargs):
+        sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)    
+
+        
 class SSAMAnalysis(object):
     def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
         """
@@ -393,7 +482,7 @@ class SSAMAnalysis(object):
                 Kernel for density estimation.
             bandwidth : float, optional
                 Parameter to adjust width of kernel.
-                Set it 2 to make FWHM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
+                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
             sampling_distance : float, optional
                 Grid spacing in um.
             use_mmap : bool, optional
@@ -500,31 +589,25 @@ class SSAMAnalysis(object):
         self.dataset.vf = vf
         return
    
-    def run_kde_fast(self, bandwidth=2.0, sampling_distance=1.0, re_run=False, n_cores=5):
+    def run_kde_fast(self, kernel='gaussian', bandwidth=2.0, sampling_distance=1.0, re_run=False, n_cores=5):
         '''
             kernel : string, optional
                 Kernel for density estimation.
             bandwidth : float, optional
                 Parameter to adjust width of kernel.
-                Set it 2 to make FWHM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
+                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
             sampling_distance : float, optional
                 Grid spacing in um.
         '''
 
-
-        maxdist=int(bandwidth*4)
-
+        maxdist = int(bandwidth*4)
         with closing(Pool(n_cores, maxtasksperchild=1)) as p:
-
             idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
-            
             self.dataset.vf = np.zeros(self.dataset.shape[:2]+(len(idcs),))
-    
             p.map(calc_slice,[(gidx, maxdist, bandwidth, self.save_dir, 
                                    self.dataset.genes[gidx], self.dataset.shape, 
                                    self.dataset.locations[gidx], re_run,
                                    sampling_distance) for gidx in idcs])
-    
             p.close()
             p.join()
         
@@ -534,8 +617,8 @@ class SSAMAnalysis(object):
                 ('%f' % bandwidth).rstrip('0').rstrip('.'),
                 gene)
             )
-            self.dataset.vf[...,gidx] = np.load(pdf_filename)            
-            
+            self.dataset.vf[...,gidx] = np.load(pdf_filename)
+        
 
     def calc_correlation_map(self, corr_size=3):
         """
@@ -836,6 +919,30 @@ class SSAMAnalysis(object):
         self.__m__("Found %d clusters"%len(centroids))
         return
 
+    def rescue_cluster(self, gene_names, expression_thresholds=[]):
+        assert len(gene_names) > 0
+        assert len(expression_thresholds) == 0 or len(gene_names) == len(expression_thresholds)
+
+        expression_thresholds = list(expression_thresholds)
+        lm_vectors = self.dataset.vf[self.dataset.local_maxs[0], self.dataset.local_maxs[1], self.dataset.local_maxs[2], :]
+        lm_mask = np.ones(len(lm_vectors), dtype=bool)
+        for i in range(len(gene_names)):
+            rg_idx = self.dataset.genes.index(gene_names[i])
+            if len(expression_thresholds) == 0:
+                expression_threshold = filters.threshold_otsu(self.dataset.vf[..., rg_idx])
+            else:
+                expression_threshold = float(expression_thresholds[i])
+            lm_mask = np.logical_and(lm_mask, lm_vectors[:, rg_idx] > expression_threshold)
+
+        rg_vectors = lm_vectors[lm_mask]
+        rg_centroid = np.mean(rg_vectors, axis=0)
+        rg_centroid_stdev = np.std(rg_vectors, axis=0)
+
+        self.dataset.cluster_labels[lm_mask] = len(self.dataset.centroids)
+        self.dataset.filtered_cluster_labels[lm_mask] = len(self.dataset.centroids)
+        self.dataset.centroids = np.append(self.dataset.centroids, [rg_centroid], axis=0)
+        self.dataset.centroids_stdev = np.append(self.dataset.centroids_stdev, [rg_centroid_stdev], axis=0)
+    
     def exclude_and_merge_clusters(self, exclude=[], merge=[], centroid_correction_threshold=0.8):
         """
         exclude_and_merge_clusters(exclude, merge)
@@ -883,7 +990,7 @@ class SSAMAnalysis(object):
         self.dataset.filtered_cluster_labels = new_labels
         
         return
-
+    
     def map_celltypes(self, centroids=None):
         """
         map_celltypes(centroids = None)
@@ -918,7 +1025,7 @@ class SSAMAnalysis(object):
         self.dataset.celltype_maps = max_corr_idx
         return
 
-    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=100, filter_params={}):
+    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=100, filter_params={}, output_mask=None):
         if isinstance(min_norm, str):
             # filter_params dict will be used for kwd params for filter_* functions.
             # some functions doesn't support param 'offset', therefore temporariliy remove it from here
@@ -974,6 +1081,8 @@ class SSAMAnalysis(object):
             # restore offset param
             filter_params['offset'] = filter_offset
 
+        if output_mask is not None:
+            filtered_ctmaps[~output_mask.astype(bool)] = -1
         self.dataset.filtered_celltype_maps = filtered_ctmaps
         
     def bin_celltypemaps(self, step=10, radius=100):
@@ -1026,7 +1135,38 @@ class SSAMAnalysis(object):
         self.dataset.celltype_binned_counts = ct_counts
         return
         
-    def regionalize(self, centroid_indices=[], n_clusters=10, norm_thres=0, merge_thres=0.6, merge_remote=True):
+    def find_domains(self, centroid_indices=[], n_clusters=10, norm_thres=0, merge_thres=0.6, merge_remote=True):
+        def find_neighbors(m, l):
+            neighbors = set()
+            for x, y, z in zip(*np.where(m == l)):
+                neighbors.add(m[x - 1, y    , z    ])
+                neighbors.add(m[x + 1, y    , z    ])
+                neighbors.add(m[x    , y - 1, z    ])
+                neighbors.add(m[x    , y + 1, z    ])
+                neighbors.add(m[x    , y    , z - 1])
+                neighbors.add(m[x    , y    , z + 1])
+                neighbors.add(m[x - 1, y - 1, z    ])
+                neighbors.add(m[x + 1, y - 1, z    ])
+                neighbors.add(m[x - 1, y + 1, z    ])
+                neighbors.add(m[x + 1, y + 1, z    ])
+                neighbors.add(m[x - 1, y    , z - 1])
+                neighbors.add(m[x + 1, y    , z - 1])
+                neighbors.add(m[x - 1, y    , z + 1])
+                neighbors.add(m[x + 1, y    , z + 1])
+                neighbors.add(m[x    , y - 1, z - 1])
+                neighbors.add(m[x    , y + 1, z - 1])
+                neighbors.add(m[x    , y - 1, z + 1])
+                neighbors.add(m[x    , y + 1, z + 1])
+                neighbors.add(m[x - 1, y - 1, z - 1])
+                neighbors.add(m[x + 1, y - 1, z - 1])
+                neighbors.add(m[x - 1, y - 1, z + 1])
+                neighbors.add(m[x + 1, y - 1, z + 1])
+                neighbors.add(m[x - 1, y + 1, z - 1])
+                neighbors.add(m[x + 1, y + 1, z - 1])
+                neighbors.add(m[x - 1, y + 1, z + 1])
+                neighbors.add(m[x + 1, y + 1, z + 1])
+            return neighbors
+        
         if self.dataset.celltype_binned_counts is None:
             raise AssertionError("Run 'bin_celltypemap()' method first!")
 
@@ -1054,35 +1194,7 @@ class SSAMAnalysis(object):
                     layer_map_padded = np.pad(layer_map, 1, mode='constant', constant_values=0)
                     neighbors_dic = {}
                     for lbl in uniq_labels:
-                        neighbors = set()
-                        for x, y, z in zip(*np.where(layer_map_padded == lbl)):
-                            neighbors.add(layer_map_padded[x - 1, y    , z    ])
-                            neighbors.add(layer_map_padded[x + 1, y    , z    ])
-                            neighbors.add(layer_map_padded[x    , y - 1, z    ])
-                            neighbors.add(layer_map_padded[x    , y + 1, z    ])
-                            neighbors.add(layer_map_padded[x    , y    , z - 1])
-                            neighbors.add(layer_map_padded[x    , y    , z + 1])
-                            neighbors.add(layer_map_padded[x - 1, y - 1, z    ])
-                            neighbors.add(layer_map_padded[x + 1, y - 1, z    ])
-                            neighbors.add(layer_map_padded[x - 1, y + 1, z    ])
-                            neighbors.add(layer_map_padded[x + 1, y + 1, z    ])
-                            neighbors.add(layer_map_padded[x - 1, y    , z - 1])
-                            neighbors.add(layer_map_padded[x + 1, y    , z - 1])
-                            neighbors.add(layer_map_padded[x - 1, y    , z + 1])
-                            neighbors.add(layer_map_padded[x + 1, y    , z + 1])
-                            neighbors.add(layer_map_padded[x    , y - 1, z - 1])
-                            neighbors.add(layer_map_padded[x    , y + 1, z - 1])
-                            neighbors.add(layer_map_padded[x    , y - 1, z + 1])
-                            neighbors.add(layer_map_padded[x    , y + 1, z + 1])
-                            neighbors.add(layer_map_padded[x - 1, y - 1, z - 1])
-                            neighbors.add(layer_map_padded[x + 1, y - 1, z - 1])
-                            neighbors.add(layer_map_padded[x - 1, y - 1, z + 1])
-                            neighbors.add(layer_map_padded[x + 1, y - 1, z + 1])
-                            neighbors.add(layer_map_padded[x - 1, y + 1, z - 1])
-                            neighbors.add(layer_map_padded[x + 1, y + 1, z - 1])
-                            neighbors.add(layer_map_padded[x - 1, y + 1, z + 1])
-                            neighbors.add(layer_map_padded[x + 1, y + 1, z + 1])
-                        neighbors_dic[lbl] = neighbors
+                        neighbors_dic[lbl] = find_neighbors(layer_map_padded, lbl)
                 cluster_centroids = []
                 for lbl in uniq_labels:
                     cluster_centroids.append(np.mean(binned_ctmaps[layer_map == lbl], axis=0))
@@ -1101,20 +1213,54 @@ class SSAMAnalysis(object):
                     layer_map[layer_map == max_corr_indices[1]] = max_corr_indices[0]
                 else:
                     break
-        
+
+        """
+        if min_size > 0:
+            labeled_layer_map = measure.label(layer_map)
+            labeled_layer_map_padded = np.pad(labeled_layer_map, 1, mode='constant', constant_values=0)
+            for prop in measure.regionprops(labeled_layer_map):
+                if prop.area < min_size:
+                    find_neighbors(layer_map_padded, )
+        """
+
         uniq_labels = sorted(set(list(np.ravel(layer_map))) - set([0]))
         for i, lbl in enumerate(uniq_labels, start=1):
             layer_map[layer_map == lbl] = i
-
-        resized_layer_map = np.zeros_like(self.dataset.filtered_celltype_maps, dtype=int)
-        for z in range(self.dataset.shape[-1]):
-            im = Image.fromarray(np.array(layer_map[..., z], dtype='int8'))
-            resized_layer_map[..., z] = np.array(im.resize([self.dataset.shape[1], self.dataset.shape[0]], Image.NEAREST)) - 1
+        
+        resized_layer_map = zoom(layer_map, np.array(self.dataset.vf_norm.shape)/np.array(layer_map.shape), order=0) - 1
         resized_layer_map2 = np.array(resized_layer_map, copy=True)
         resized_layer_map2[self.dataset.filtered_celltype_maps == -1] = -1
+        
+        self.dataset.inferred_domains = resized_layer_map
+        self.dataset.inferred_domains_cells = resized_layer_map2
+     
+    def exclude_and_merge_domains(self, exclude=[], merge=[]):
+        for i in exclude:
+            self.dataset.inferred_domains[self.dataset.inferred_domains == i] = -1
+            self.dataset.inferred_domains_cells[self.dataset.inferred_domains_cells == i] = -1
+            
+        for i in merge:
+            for j in i[1:]:
+                self.dataset.inferred_domains[self.dataset.inferred_domains == j] = i[0]
+                self.dataset.inferred_domains_cells[self.dataset.inferred_domains_cells == j] = i[0]
 
-        self.dataset.inferred_regions = resized_layer_map
-        self.dataset.inferred_regions_cells = resized_layer_map2
+        uniq_indices = np.unique(self.dataset.inferred_domains_cells)
+        if -1 in uniq_indices:
+            uniq_indices = uniq_indices[1:]
+            
+        for new_idx, i in enumerate(uniq_indices):
+            self.dataset.inferred_domains[self.dataset.inferred_domains == i] = new_idx
+            self.dataset.inferred_domains_cells[self.dataset.inferred_domains_cells == i] = new_idx
+
+    def calc_cell_type_compositions(self):
+        cell_type_compositions = []
+        for i in range(np.max(self.dataset.inferred_domains) + 1):
+            counts = np.bincount(self.dataset.filtered_celltype_maps[self.dataset.inferred_domains == i] + 1, minlength=len(self.dataset.centroids) + 1)
+            cell_type_compositions.append(counts[1:])
+        cell_type_compositions.append(np.sum(cell_type_compositions, axis=0)) # Add 'all' domains
+        cell_type_compositions = preprocessing.normalize(cell_type_compositions, axis=1, norm='l1')
+        self.dataset.inferred_domains_compositions = cell_type_compositions
+        
         
     def calc_spatial_relationship(self):
         if self.dataset.celltype_binned_counts is None:
