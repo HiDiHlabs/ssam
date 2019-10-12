@@ -1257,7 +1257,10 @@ class SSAMAnalysis(object):
         for i in range(np.max(self.dataset.inferred_domains) + 1):
             counts = np.bincount(self.dataset.filtered_celltype_maps[self.dataset.inferred_domains == i] + 1, minlength=len(self.dataset.centroids) + 1)
             cell_type_compositions.append(counts[1:])
-        cell_type_compositions.append(np.sum(cell_type_compositions, axis=0)) # Add 'all' domains
+        
+        masked_ctmap = self.dataset.filtered_celltype_maps[self.dataset.filtered_celltype_maps != -1]
+        counts_all = np.array(np.bincount(masked_ctmap, minlength=len(self.dataset.centroids)), dtype=float)
+        cell_type_compositions.append(counts_all) # Add proportion from the whole tissue
         cell_type_compositions = preprocessing.normalize(cell_type_compositions, axis=1, norm='l1')
         self.dataset.inferred_domains_compositions = cell_type_compositions
         
