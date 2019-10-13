@@ -11,7 +11,7 @@ and in collaboration with the SpaceTx consortium and the Human Cell Atlas projec
 Prerequisites
 =============
 
-In addition to this package, SSAM requires local R installation with packages 'feather' and 'sctransform' installed.
+In addition to this package, SSAM requires a local R installation with pre-installed packages `feather` and `sctransform`.
 
 Install
 ============
