@@ -392,7 +392,7 @@ class SSAMDataset(object):
                 else:
                     col = cluster_color
                 ax.bar(self.genes, sig_values[max_corr_idx], color=col)
-                ax.set_title("%s (max %s: %.3f)"%(lbl, corr_label, corr_results[max_corr_idx]))
+                ax.set_title("%s in %s (max %s, %.3f)"%(lbl, sig_title, corr_label, corr_results[max_corr_idx]))
                 plt.xlim([-1, len(self.genes)])
                 plt.xticks(rotation=90)
                 subplot_idx += 1
