@@ -8,6 +8,11 @@ Author: Jeongbin Park (jeongbin.park@charite.de)<sup>1,2</sup> and Wonyl Choi (w
 This project was done under supervision of Prof. Roland Eils (roland.eils@charite.de),
 and in collaboration with the SpaceTx consortium and the Human Cell Atlas project.
 
+Prerequisites
+=============
+
+In addition to this package, SSAM requires local R installation with packages 'feather' and 'sctransform' installed.
+
 Install
 ============
 
