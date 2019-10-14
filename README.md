@@ -22,7 +22,7 @@ Install
 $ pip install ssam
 ```
 
-Reference
+Citations
 =========
 
 https://www.biorxiv.org/content/10.1101/800748v1
