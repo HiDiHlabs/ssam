@@ -1,5 +1,7 @@
-SSAM
+SSAM (Spot-based Spatial cell-type Analysis by Multidimensional mRNA density estimation)
 ============================================================================================
+
+Not referring this: https://en.wikipedia.org/wiki/Ssam
 
 Author: Jeongbin Park (jeongbin.park@charite.de)<sup>1,2</sup> and Wonyl Choi (wonyl@bu.edu)<sup>3</sup>
 
