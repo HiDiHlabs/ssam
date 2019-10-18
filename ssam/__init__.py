@@ -36,51 +36,47 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
-def calc_slice(args):
+def fast_gaussian_kde(args):
+    # TODO: 1) support sampling distance
+    #       2) support other kernels
+    (bandwidth, save_dir, gene_name, shape, locations, sampling_distance) = args
     
-    (gidx, maxdist, bandwidth, save_dir, gene_name, shape, locations, re_run, sampling_distance) = args
-        
-    #bandwidth = 1#bandwidth**0.5
+    print('Processing gene %s...'%gene_name)
+
+    maxdist = int(bandwidth * 4)
     span = np.linspace(-maxdist,maxdist,maxdist*2+1)
-    X,Y = np.meshgrid(span,span)#,[0])
+    X, Y, Z = np.meshgrid(span,span,span)
     
-    def create_kernel(x,y,z,X=X,Y=Y,span=span):#,Z=Z):
+    def create_kernel(x, y, z):
         X_=(-x+X)/bandwidth
         Y_=(-y+Y)/bandwidth
-#        Z_=(z-Z)/bandwidth        
-        return np.exp(-0.5*(X_**2+Y_**2))#+Z_**2))  
+        Z_=(-z+Z)/bandwidth
+        return np.exp(-0.5*(X_**2+Y_**2+Z_**2))
     
-    print('Processing gene %s'%gene_name, gidx )
+    pd = np.zeros(shape)
+    for loc in locations:
+        int_loc = [int(i) for i in loc]
+        rem_loc = [i%1 for i in loc]
 
-    pdf_filename = os.path.join(save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
-        ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-        ('%f' % bandwidth).rstrip('0').rstrip('.'),
-        gene_name)
-    )            
-      
-    if not os.path.exists(pdf_filename) or re_run:  
-       
-        vf_slice = np.zeros([s+2*maxdist for s in shape[:2]])
-        
-        for n_dp,[x,y,z] in enumerate(locations):
-            int_x,int_y = (int(x)+maxdist,int(y)+maxdist)
-            rem_x,rem_y = (x%1,y%1)
-            
-            kernel = create_kernel(rem_x,rem_y,0)
-                
-            x_ = int_x-maxdist
-            y_ = int_y-maxdist
-            _x = int_x+maxdist+1
-            _y = int_y+maxdist+1
-            
-            vf_slice[x_:_x,y_:_y]+=kernel.squeeze().T
-        
-        pdf = vf_slice[maxdist:-maxdist,maxdist:-maxdist]
-        
-        pdf/=pdf.sum()
-        
-        np.save(pdf_filename, pdf)
+        kernel = create_kernel(*rem_loc)
+
+        pos_start = [i - maxdist for i in int_loc]
+        pos_end = [i + maxdist + 1 for i in int_loc]
+
+        kernel_pos_start = [abs(i) if i < 0 else 0 for i in pos_start]
+        kernel_pos_end = [maxdist*2+1 - (i-j) if i > j else maxdist*2+1 for i, j in zip(pos_end, shape)]
+
+        pos_start = [0 if i < 0 else i for i in pos_start]
+        pos_end = [j if i >= j else i for i, j in zip(pos_end, shape)]
+
+        slices = tuple([slice(i, j) for i, j in zip(pos_start, pos_end)])
+        kernel_slices = tuple([slice(i, j) for i, j in zip(kernel_pos_start, kernel_pos_end)])
+        pd[slices] += kernel.swapaxes(0, 1)[kernel_slices]
+
+    pd /= pd.sum()
+    pd *= len(locations)
     
+    return pd
 
 def run_sctransform(data, **kwargs):
     vst_options = ['%s = "%s"'%(k, v) if type(v) is str else '%s = %s'%(k, v) for k, v in kwargs.items()]
@@ -472,7 +468,7 @@ class SSAMAnalysis(object):
         if self.verbose:
             print(message)
             
-    def run_kde(self, kernel="gaussian", bandwidth=2.0, sampling_distance=1.0, use_mmap=True):
+    def run_kde(self, kernel="gaussian", bandwidth=2.0, sampling_distance=1.0, use_mmap=False):
         """
         run_kde(kernel = "gaussian", bandwidth = 2.0, sampling_distance = 1.0)
             Run KDE to estimate density of mRNA.
@@ -482,12 +478,12 @@ class SSAMAnalysis(object):
                 Kernel for density estimation.
             bandwidth : float, optional
                 Parameter to adjust width of kernel.
-                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
+                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
             sampling_distance : float, optional
                 Grid spacing in um.
             use_mmap : bool, optional
                 Use MMAP to reduce memory usage during analysis.
-                Turning off this option significantly increases analysis speed, but can use tremendous amount of memory.
+                Turning on this option can reduce the amount of memory used by SSAM analysis, but also lower the analysis speed.
         """
         def save_pickle(fn, o):
             with open(fn, "wb") as f:
@@ -540,7 +536,8 @@ class SSAMAnalysis(object):
 
             pool = None
             for gidx, gene_name in enumerate(self.dataset.genes):
-                pdf_filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+                
+                filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
                     ('%f' % sampling_distance).rstrip('0').rstrip('.'),
                     ('%f' % bandwidth).rstrip('0').rstrip('.'),
                     gene_name)
@@ -589,36 +586,75 @@ class SSAMAnalysis(object):
         self.dataset.vf = vf
         return
    
-    def run_kde_fast(self, kernel='gaussian', bandwidth=2.0, sampling_distance=1.0, re_run=False, n_cores=5):
-        '''
+    def run_fast_kde(self, kernel='gaussian', bandwidth=2.0, sampling_distance=1.0, re_run=False, use_mmap=False):
+        """
+        run_fast_kde(kernel = "gaussian", bandwidth = 2.0, sampling_distance = 1.0)
+            Run KDE faster than `run_kde` method. This method uses precomputed kernels to estimate density of mRNA.
+            Parameters
+            ----------
             kernel : string, optional
-                Kernel for density estimation.
+                Kernel for density estimation. Currently only Gaussian kernel is supported.
             bandwidth : float, optional
                 Parameter to adjust width of kernel.
-                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is 10um).
+                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
             sampling_distance : float, optional
-                Grid spacing in um.
-        '''
+                Grid spacing in um. Currently only 1 um is supported.
+            re_run: bool, optional
+                Recomputes KDE, ignoring all existing precomputed densities in the data directory.
+            use_mmap : bool, optional
+                Use MMAP to reduce memory usage during analysis. Currently not implemented, this option should be always disabled.
+        """
+        if kernel != 'gaussian':
+            raise NotImplementedError('Only Gaussian kernel is supported.')
+        if sampling_distance != 1.0:
+            raise NotImplementedError('Sampling distance should be 1.')
+        if use_mmap:
+            raise NotImplementedError('MMAP is not supported yet.')
+            
+        def save_pickle(fn, o):
+            with open(fn, "wb") as f:
+                return pickle.dump(o, f, protocol=4)
+        def load_pickle(fn):
+            with open(fn, "rb") as f:
+                return pickle.load(f)
 
-        maxdist = int(bandwidth*4)
-        with closing(Pool(n_cores, maxtasksperchild=1)) as p:
-            idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
-            self.dataset.vf = np.zeros(self.dataset.shape[:2]+(len(idcs),))
-            p.map(calc_slice,[(gidx, maxdist, bandwidth, self.save_dir, 
-                                   self.dataset.genes[gidx], self.dataset.shape, 
-                                   self.dataset.locations[gidx], re_run,
-                                   sampling_distance) for gidx in idcs])
-            p.close()
-            p.join()
+        vf_filename = os.path.join(self.save_dir, 'vf_sd%s_bw%s.pkl'%(
+            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+            ('%f' % bandwidth).rstrip('0').rstrip('.')
+        ))
         
-        for gidx,gene in enumerate(self.dataset.genes):
-            pdf_filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
-                ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-                ('%f' % bandwidth).rstrip('0').rstrip('.'),
-                gene)
-            )
-            self.dataset.vf[...,gidx] = np.load(pdf_filename)
+        if os.path.exists(vf_filename) and not re_run:
+            self.dataset.vf = load_pickle(vf_filename)
+            return
+
+        self.dataset.vf = np.zeros(self.dataset.shape+(len(self.dataset.genes),))
+        idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
+        pdf_filenames = [os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+            ('%f' % bandwidth).rstrip('0').rstrip('.'),
+            self.dataset.genes[gidx])
+        ) for gidx in idcs]
+
+        if not re_run:
+            idcs = np.where([not os.path.exists(fn) for fn in pdf_filenames])[0]
+            for gidx in np.where([os.path.exists(fn) for fn in pdf_filenames])[0]:
+                print("Loading gene %s..."%self.dataset.genes[gidx])
+                self.dataset.vf[..., gidx] = np.load(pdf_filenames[gidx])
         
+        if len(idcs) > 0:
+            with closing(Pool(self.ncores, maxtasksperchild=1)) as p:
+                res = p.imap(fast_gaussian_kde,[(bandwidth,
+                                                 self.save_dir,
+                                                 self.dataset.genes[gidx],
+                                                 self.dataset.shape,
+                                                 self.dataset.locations[gidx],
+                                                 sampling_distance) for gidx in idcs])
+                for gidx, pd in zip(idcs, res): # imap returns result in the same order as the input array
+                    self.dataset.vf[..., gidx] = pd
+                    np.save(pdf_filenames[gidx], pd)
+                p.close()
+                p.join()
+        save_pickle(vf_filename, self.dataset.vf)
 
     def calc_correlation_map(self, corr_size=3):
         """

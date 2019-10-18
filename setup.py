@@ -14,7 +14,7 @@ with io.open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="ssam",
-    version="1.0.0",
+    version="1.0.1",
     author="Jeongbin Park",
     author_email="jeongbin.park@charite.de",
     description="SSAM",
