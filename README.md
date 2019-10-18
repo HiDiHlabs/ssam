@@ -1,11 +1,11 @@
 SSAM (Spot-based Spatial cell-type Analysis by Multidimensional mRNA density estimation)
 ============================================================================================
 
-Not referring this: https://en.wikipedia.org/wiki/Ssam
-
 Author: Jeongbin Park (jeongbin.park@charite.de)<sup>1,2</sup> and Wonyl Choi (wonyl@bu.edu)<sup>3</sup>
 
 <sup>1</sup>Digital Health Center, Berlin Institute of Health (BIH) and Charité – Universitätsmedizin, Berlin, Germany; <sup>2</sup>Faculty of Biosciences, Heidelberg University, Heidelberg, Germany; <sup>3</sup>Department of Computer Science, Boston University, Boston, the United States of America
+
+(Not referring this :laughing:: https://en.wikipedia.org/wiki/Ssam)
 
 This project was done under supervision of Prof. Roland Eils (roland.eils@charite.de),
 and in collaboration with the SpaceTx consortium and the Human Cell Atlas project.
