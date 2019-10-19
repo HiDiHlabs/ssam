@@ -1,13 +1,3 @@
-ssam package
-============
-
-Submodules
-----------
-
-.. toctree::
-
-   ssam.analysis
-
 Module contents
 ---------------
 

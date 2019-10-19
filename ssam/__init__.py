@@ -36,7 +36,7 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
-def fast_gaussian_kde(args):
+def __fast_gaussian_kde(args):
     # TODO: 1) support sampling distance
     #       2) support other kernels
     (bandwidth, save_dir, gene_name, shape, locations, sampling_distance) = args
@@ -79,6 +79,17 @@ def fast_gaussian_kde(args):
     return pd
 
 def run_sctransform(data, **kwargs):
+    """
+    Run 'sctransform' R package and returns the normalized matrix and the model parameters.
+    Package 'feather' is used for the data exchange between R and Python.
+
+    :param data: N x D ndarray to normlize (N is number of samples, D is number of dimensions).
+    :type data: numpy.ndarray
+    :param kwargs: Any keyword arguments passed to R function `vst`.
+    :returns: A 2-tuple, which contains two pandas.dataframe: 
+        (1) normalized N x D matrix.
+        (2) determined model parameters.
+    """
     vst_options = ['%s = "%s"'%(k, v) if type(v) is str else '%s = %s'%(k, v) for k, v in kwargs.items()]
     if len(vst_options) == 0:
         vst_opt_str = ''
@@ -95,33 +106,23 @@ def run_sctransform(data, **kwargs):
         return pd.read_feather(ofn), pd.read_feather(pfn)
 
 class SSAMDataset(object):
-    def __init__(self, genes, locations, width, height, depth=1):
-        """
-        SSAMDataset(genes, locations, width, height, depth = 1, ncores = -1, save_dir = "", verbose = False)
-            A class to store intial values and results of SSAM analysis.
+    """
+    A class to store intial values and results of SSAM analysis.
 
-            Parameters
-            ----------
-            genes : list(string)
-                The genes that will be used for the analysis.
-            locations : list(numpy.ndarray)
-                Location of the mRNAs in um, given as a list of
-                N x D ndarrays (N is number of mRNAs, D is number of dimensions).
-            width : float
-                Width of the image in um.
-            height : float
-                Height of the image in um.
-            depth : float, optional
-                Depth of the image in um. Depth == 1 means 2D image.
-            
-            Properties
-            ----------
-            vf : numpy.ndarray
-                The vector field.
-            vf_norm : numpy.ndarray
-                L1 norm of the vector field.
-        """
+    :param genes: The genes that will be used for the analysis.
+    :type genes: list(str)    
+    :param locations: Location of the mRNAs in um, given as a list of
+        N x D ndarrays (N is number of mRNAs, D is number of dimensions).
+    :type locations: list(numpy.ndarray)
+    :param width: Width of the image in um.
+    :type width: float
+    :param height: Height of the image in um.
+    :type height: float
+    :param depth: Depth of the image in um. Depth == 1 means 2D image.
+    :type depth: float
+    """
         
+    def __init__(self, genes, locations, width, height, depth=1):
         if depth < 1 or width < 1 or height < 1:
             raise ValueError("Invalid image dimension")
         self.shape = (width, height, depth)
@@ -149,6 +150,9 @@ class SSAMDataset(object):
 
     @property
     def vf(self):
+        """
+        Vector field as a numpy.ndarray.
+        """
         return self.__vf
     
     @vf.setter
@@ -158,18 +162,28 @@ class SSAMDataset(object):
         
     @property
     def vf_norm(self):
+        """
+        `L1-norm <http://mathworld.wolfram.com/L1-Norm.html>`_ of the vector field as a numpy.ndarray.
+        """
+
         if self.vf is None:
             return None
         if self.__vf_norm is None:
             self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
         return self.__vf_norm
     
-    def get_celltype_correlation(self, idx):
-        rtn = np.zeros_like(self.max_correlations) - 1
-        rtn[self.celltype_maps == idx] = self.max_correlations[self.celltype_maps == idx]
-        return rtn
-    
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
+        """
+        Plot the `L1-norm <http://mathworld.wolfram.com/L1-Norm.html>`_ of the vector field.
+
+        :param cmap: Colormap used for the plot.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param rotate: Rotate the plot. Possible values are 0, 1, 2, and 3.
+        :type rotate: int
+        :param z: Z index to slice 3D vector field.
+            If not given, the slice at the middle will be plotted.
+        :type z: int
+        """
         if z is None:
             z = int(self.vf_norm.shape[2] / 2)
         if rotate < 0 or rotate > 3:
@@ -187,6 +201,17 @@ class SSAMDataset(object):
             plt.gca().invert_yaxis()
 
     def plot_localmax(self, c=None, cmap=None, s=1, rotate=0):
+        """
+        Scatter plot the local maxima.
+
+        :param c: Color of the scatter dots. Overrides `cmap` parameter.
+        :type c: str or list(str), or list(float) or list(list(float))
+        :param cmap: Colormap of the scatter dots.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param s: Size of the scatter dots.
+        :param rotate: Rotate the plot. Possible values are 0, 1, 2, and 3.
+        :type rotate: int
+        """
         if rotate < 0 or rotate > 3:
             raise ValueError("rotate can only be 0, 1, 2, 3")
         if rotate == 0 or rotate == 2:
@@ -211,7 +236,38 @@ class SSAMDataset(object):
             good_vecs = self.normalized_vectors
         return PCA(n_components=pca_dims, random_state=random_state).fit_transform(good_vecs)
         
-    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", tsne_kwargs={}):
+    def plot_tsne(self, run_tsne=False, pca_dims=10, n_iter=5000, perplexity=70, early_exaggeration=10,
+                  metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", tsne_kwargs={}):
+        """
+        Scatter plot the tSNE embedding.
+
+        :param run_tsne: If false, this method tries to load precomputed tSNE result before running tSNE.
+        :type run_tsne: bool
+        :param pca_dims: Number of PCA dimensions used for the tSNE embedding.
+        :type pca_dims: int
+        :param n_iter: Maximum number of iterations for the tSNE.
+        :type n_iter: int
+        :param perplexity: The perplexity value of the tSNE (please refer to the section `How should I set the perplexity in t-SNE?` in this `link <https://lvdmaaten.github.io/tsne/>`_).
+        :type perplexity: float
+        :param early_exaggeration: Early exaggeration parameter for tSNE. Controls the tightness of the resulting tSNE plot.
+        :type early_exaggeration: float
+        :param metric: Metric for calculation of distance between vectors in gene expression space.
+        :type metric: str
+        :param exclude_bad_clusters: If true, the vectors that are excluded by the clustering algorithm will not be considered for tSNE computation.
+        :type exclude_bad_clusters: bool
+        :param s: Size of the scatter dots.
+        :type s: float
+        :param random_state: Random seed or scikit-learn's random state object to replicate the same result
+        :type random_state: int or random state object
+        :param colors: Color of each clusters.
+        :type colors: list(str), list(list(float))
+        :param excluded_color: Color of the vectors excluded by the clustering algorithm.
+        :type excluded_color: str of list(float)
+        :param cmap: Colormap for the clusters.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param tsne_kwargs: Other keyward parameters for tSNE.
+        :type tsne_kwargs: dict
+        """
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_tsne or self.tsne is None:
@@ -231,6 +287,30 @@ class SSAMDataset(object):
         return
 
     def plot_umap(self, run_umap=False, pca_dims=10, metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", umap_kwargs={}):
+        """
+        Scatter plot the UMAP embedding.
+
+        :param run_umap: If false, this method tries to load precomputed UMAP result before running UMAP.
+        :type run_tsne: bool
+        :param pca_dims: Number of PCA dimensions used for the UMAP embedding.
+        :type pca_dims: int
+        :param metric: Metric for calculation of distance between vectors in gene expression space.
+        :type metric: str
+        :param exclude_bad_clusters: If true, the vectors that are excluded by the clustering algorithm will not be considered for tSNE computation.
+        :type exclude_bad_clusters: bool
+        :param s: Size of the scatter dots.
+        :type s: float
+        :param random_state: Random seed or scikit-learn's random state object to replicate the same result
+        :type random_state: int or random state object
+        :param colors: Color of each clusters.
+        :type colors: list(str), list(list(float))
+        :param excluded_color: Color of the vectors excluded by the clustering algorithm.
+        :type excluded_color: str of list(float)
+        :param cmap: Colormap for the clusters.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param umap_kwargs: Other keyward parameters for UMAP.
+        :type umap_kwargs: dict
+        """
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_umap or self.umap is None:
@@ -250,15 +330,48 @@ class SSAMDataset(object):
         return
     
     def plot_expanded_mask(self, cmap='Greys'): # TODO
+        """
+        Plot the expanded area of the vectors (Not fully implemented yet).
+
+        :param cmap: Colormap for the mask.
+        """
         plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap)
         return
     
     def plot_correlation_map(self, cmap='hot'): # TODO
+        """
+        Plot the correlations near the vectors in the vector field (Not fully implemented yet).
+
+        :param cmap: Colormap for the image.
+        """
         plt.imshow(self.corr_map, vmin=0.995, vmax=1.0, cmap=cmap)
         plt.colorbar()
         return
     
-    def plot_celltypes_map(self, background="black", centroid_indices=[], colors=None, cmap='jet', rotate=0, min_r=0.6, set_alpha=True, z=None):
+    def plot_celltypes_map(self, background="black", centroid_indices=[], colors=None, cmap='jet', rotate=0, min_r=0.6, set_alpha=False, z=None):
+        """
+        Plot the merged cell-type map.
+
+        :param background: Set background color of the cell-type map.
+        :type background: str or list(float)
+        :param centroid_indices: The centroids which will be in the cell type map. If not given, the cell-type map is drawn with all centroids.
+        :type centroid_indices: list(int)
+        :param colors: Color of the clusters. Overrides `cmap` parameter.
+        :type colors: list(str), list(list(float))
+        :param cmap: Colormap for the clusters.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param rotate: Rotate the plot. Possible values are 0, 1, 2, and 3.
+        :type rotate: int
+        :param min_r: Minimum correlation threshold for the cell-type map.
+            This value is only for the plotting, does not affect to the cell-type maps generated by `filter_celltypemaps`.
+        :type min_r: float
+        :param set_alpha: Set alpha of each pixel based on the correlation.
+            Not properly implemented yet, doesn't work properly with the background other than black.
+        :type set_alpha: bool
+        :param z: Z index to slice 3D cell-type map.
+            If not given, the slice at the middle will be used.
+        :type z: int
+        """
         if z is None:
             z = int(self.shape[2] / 2)
         num_ctmaps = np.max(self.filtered_celltype_maps) + 1
@@ -302,6 +415,25 @@ class SSAMDataset(object):
         return
 
     def plot_domains(self, background='white', colors=None, cmap='jet', rotate=0, domain_background=False, background_alpha=0.3, z=None):
+        """
+        Plot tissue domains.
+
+        :param background: Background color of the plot.
+        :type background: str or list(float)
+        :param colors: Color of the domains. Overrides `cmap` parameter.
+        :type colors: list(str), list(list(float))
+        :param cmap: Colormap for the domains.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param rotate: Rotate the plot. Possible values are 0, 1, 2, and 3.
+        :type rotate: int
+        :param domain_background: Show the area of the inferred domains behind the domain map.
+        :type domain_background: bool
+        :param background_alpha: The alpha value of the area of the inferred domains.
+        :type background_alpha: float
+        :param z: Z index to slice 3D domain map.
+            If not given, the slice at the middle will be used.
+        :type z: int
+        """
         if z is None:
             z = int(self.shape[2] / 2)
         
@@ -338,7 +470,34 @@ class SSAMDataset(object):
             
         return
     
-    def plot_diagnostic_plot(self, centroid_index, cluster_name=None, cluster_color=None, cmap=None, use_embedding="tsne", known_signatures=[], correlation_methods=[]):
+    def plot_diagnostic_plot(self, centroid_index, cluster_name=None, cluster_color=None, cmap=None, rotate=0, z=None, use_embedding="tsne", known_signatures=[], correlation_methods=[]):
+        """
+        Plot the diagnostic plot. This method requires `plot_tsne` or `plot_umap` was run at least once before.
+
+        :param centroid_index: Index of the centroid for the diagnostic plot.
+        :type centroid_index: int
+        :param cluster_name: The name of the cluster.
+        :type cluster_name: str
+        :param cluster_color: The color of the cluster. Overrides `cmap` parameter.
+        :type cluster_color: str or list(float)
+        :param cmap: The colormap for the clusters. The cluster color is determined using the `centroid_index` th color of the given colormap.
+        :type cmap: str or matplotlib.colors.Colormap
+        :param rotate: Rotate the plot. Possible values are 0, 1, 2, and 3.
+        :type rotate: int
+        :param z: Z index to slice 3D vector norm and cell-type map plots.
+            If not given, the slice at the middle will be used.
+        :type z: int
+        :param use_embedding: The type of the embedding for the last panel. Possible values are "tsne" or "umap".
+        :type use_embedding: str
+        :param known_signatures: The list of known signatures, which will be displayed in the 3rd panel. Each signature can be 3-tuple or 4-tuple,
+            containing 1) the name of signature, 2) gene labels of the signature, 3) gene expression values of the signature, 4) optionally the color of the signature.
+        :type known_signatures: list(tuple)
+        :param correlation_methods: The correlation method used to determine max correlation of the centroid to the `known_signatures`. Each method should be 2-tuple,
+            containing 1) the name of the correaltion, 2) the correaltion function (compatiable with the correlation methods available in `scipy.stats <https://docs.scipy.org/doc/scipy/reference/stats.html>`_)
+        :type correlation_methods: list(tuple)
+        """
+        if z is None:
+            z = int(self.vf_norm.shape[2] / 2)
         p, e = self.centroids[centroid_index], self.centroids_stdev[centroid_index]
         if cluster_name is None:
             cluster_name = "Cluster #%d"%centroid_index
@@ -355,14 +514,22 @@ class SSAMDataset(object):
         ax = plt.subplot(1, 4, 1)
         mask = self.filtered_cluster_labels == centroid_index
         plt.scatter(self.local_maxs[0][mask], self.local_maxs[1][mask], c=[cluster_color])
-        self.plot_l1norm(rotate=1, cmap="Greys")
+        self.plot_l1norm(rotate=rotate, cmap="Greys", z=z)
 
         ax = plt.subplot(1, 4, 2)
         ctmap = np.zeros([self.filtered_celltype_maps.shape[1], self.filtered_celltype_maps.shape[0], 4])
-        ctmap[self.filtered_celltype_maps[..., 0].T == centroid_index] = to_rgba(cluster_color)
-        ctmap[np.logical_and(self.filtered_celltype_maps[..., 0].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
+        ctmap[self.filtered_celltype_maps[..., z].T == centroid_index] = to_rgba(cluster_color)
+        ctmap[np.logical_and(self.filtered_celltype_maps[..., z].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
+        if rotate == 1 or rotate == 3:
+            ctmap = ctmap.swapaxes(0, 1)
         ax.imshow(ctmap)
-        plt.xlim([self.celltype_maps.shape[0], 0])
+        if rotate == 1:
+            ax.invert_xaxis()
+        elif rotate == 2:
+            ax.invert_xaxis()
+            ax.invert_yaxis()
+        elif rotate == 3:
+            ax.invert_yaxis()
 
         ax = plt.subplot(total_signatures, 4, 3)
         ax.bar(self.genes, p, yerr=e)
@@ -407,7 +574,23 @@ class SSAMDataset(object):
         ax.get_yaxis().set_visible(False)
         ax.set_title(fig_title)
         
-    def plot_celltype_composition(self, domain_index, cell_type_colors=None, cell_type_cmap='jet', cell_type_orders=None, label_cutoff=0.03, pctdistance=1.15, **kwarg):
+    def plot_celltype_composition(self, domain_index, cell_type_colors=None, cell_type_cmap='jet', cell_type_orders=None, label_cutoff=0.03, pctdistance=1.15, **kwargs):
+        """
+        Plot composition of cell types in each domain.
+
+        :param domain_index: Index of the domain.
+        :type domain_index: int
+        :param cell_type_colors: The colors of the cell types. Overrides `cell_type_cmap` parameter.
+        :type cell_type_colors: str or list(float)
+        :param cell_type_cmap: The colormap for the cell types.
+        :type cell_type_cmap: str or matplotlib.colors.Colormap
+        :param label_cutoff: The minimum cutoff of the labeling of the percentage. From 0 to 1.
+        :type label_cutoff: float
+        :param pctdistance: The distance from center of the pie to the labels.
+        :type pctdistance: float
+        :param kwargs: More kewward arguments for the matplotlib.pyplot.pie.
+        :type kwargs: dict
+        """
         if cell_type_colors is None:
             cmap = plt.get_cmap(cell_type_cmap)
             cell_type_colors = cmap(np.arange(0, len(self.centroids)) / (len(self.centroids) - 1))
@@ -421,31 +604,38 @@ class SSAMDataset(object):
         plt.pie(p,
                 colors=ctcs,
                 autopct=lambda e: '%.1f %%'%e if e > 3 else '',
-                pctdistance=pctdistance)
+                pctdistance=pctdistance, **kwargs)
 
     def plot_spatial_relationships(self, cluster_labels, *args, **kwargs):
+        """
+        Plot spatial relationship between cell types, presented as a heatmap.
+
+        :param cluster_labels: x- and y-axis label of the heatmap.
+        :type cluster_labels: list(str)
+        :param args: More arguments for the seaborn.heatmap.
+        :type args: tuple
+        :param args: More keyword arguments for the seaborn.heatmap.
+        :type kwargs: dict
+        """
         sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)    
 
         
 class SSAMAnalysis(object):
-    def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
-        """
-        SSAMAnalysis(ncores = -1, save_dir = "", verbose = False)
-            A class to run SSAM analysis.
+    """
+    A class to run SSAM analysis.
 
-            Parameters
-            ----------
-            dataset : SSAMDataset
-                A SSAMDataset object.
-            ncores : int, optional
-                Number of cores for parallel computation. If a negative value is given,
-                (# of all available cores on system - value) cores will be used.
-            save_dir : string, optional
-                Directory to store intermediate data (e.g. density / vector field).
-                Any data which already exists will be loaded and reused.
-            verbose : bool, optional
-                If True, then it prints out messages during the analysis.
-        """
+    :param dataset: A SSAMDataset object.
+    :type dataset: SSAMDataset
+    :param ncores: Number of cores for parallel computation. If a negative value is given,
+        ((# of all available cores on system) - abs(ncores)) cores will be used.
+    :type ncores: int
+    :param save_dir: Directory to store intermediate data (e.g. density / vector field).
+        Any data which already exists will be loaded and reused.
+    :type save_dir: str
+    :param verbose: If True, then it prints out messages during the analysis.
+    :type verbose: bool
+    """
+    def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
         
         self.dataset = dataset
         if not ncores > 0:
@@ -468,22 +658,20 @@ class SSAMAnalysis(object):
         if self.verbose:
             print(message)
             
-    def run_kde(self, kernel="gaussian", bandwidth=2.0, sampling_distance=1.0, use_mmap=False):
+    def run_kde(self, kernel="gaussian", bandwidth=2.5, sampling_distance=1.0, use_mmap=False):
         """
-        run_kde(kernel = "gaussian", bandwidth = 2.0, sampling_distance = 1.0)
-            Run KDE to estimate density of mRNA.
-            Parameters
-            ----------
-            kernel : string, optional
-                Kernel for density estimation.
-            bandwidth : float, optional
-                Parameter to adjust width of kernel.
-                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
-            sampling_distance : float, optional
-                Grid spacing in um.
-            use_mmap : bool, optional
-                Use MMAP to reduce memory usage during analysis.
-                Turning on this option can reduce the amount of memory used by SSAM analysis, but also lower the analysis speed.
+        Run KDE to estimate density of mRNA.
+
+        :param kernel: Kernel for density estimation.
+        :type kernel: str
+        :param bandwidth: Parameter to adjust width of kernel.
+            Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
+        :type bandwidth: float
+        :param sampling_distance: Grid spacing in um.
+        :type sampling_distance: float
+        :param use_mmap: Use MMAP to reduce memory usage during analysis.
+            Turning on this option can reduce the amount of memory used by SSAM analysis, but also lower the analysis speed.
+        :type use_mmap: bool
         """
         def save_pickle(fn, o):
             with open(fn, "wb") as f:
@@ -586,23 +774,21 @@ class SSAMAnalysis(object):
         self.dataset.vf = vf
         return
    
-    def run_fast_kde(self, kernel='gaussian', bandwidth=2.0, sampling_distance=1.0, re_run=False, use_mmap=False):
+    def run_fast_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, re_run=False, use_mmap=False):
         """
-        run_fast_kde(kernel = "gaussian", bandwidth = 2.0, sampling_distance = 1.0)
-            Run KDE faster than `run_kde` method. This method uses precomputed kernels to estimate density of mRNA.
-            Parameters
-            ----------
-            kernel : string, optional
-                Kernel for density estimation. Currently only Gaussian kernel is supported.
-            bandwidth : float, optional
-                Parameter to adjust width of kernel.
-                Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
-            sampling_distance : float, optional
-                Grid spacing in um. Currently only 1 um is supported.
-            re_run: bool, optional
-                Recomputes KDE, ignoring all existing precomputed densities in the data directory.
-            use_mmap : bool, optional
-                Use MMAP to reduce memory usage during analysis. Currently not implemented, this option should be always disabled.
+        Run KDE faster than `run_kde` method. This method uses precomputed kernels to estimate density of mRNA.
+
+        :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
+        :type kernel: str
+        :param bandwidth: Parameter to adjust width of kernel.
+            Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
+        :type bandwidth: float
+        :param sampling_distance: Grid spacing in um. Currently only 1 um is supported.
+        :type sampling_distance: float
+        :param re_run: Recomputes KDE, ignoring all existing precomputed densities in the data directory.
+        :type re_run: bool
+        :param use_mmap: Use MMAP to reduce memory usage during analysis. Currently not implemented, this option should be always disabled.
+        :type use_mmap: bool
         """
         if kernel != 'gaussian':
             raise NotImplementedError('Only Gaussian kernel is supported.')
@@ -643,7 +829,7 @@ class SSAMAnalysis(object):
         
         if len(idcs) > 0:
             with closing(Pool(self.ncores, maxtasksperchild=1)) as p:
-                res = p.imap(fast_gaussian_kde,[(bandwidth,
+                res = p.imap(__fast_gaussian_kde,[(bandwidth,
                                                  self.save_dir,
                                                  self.dataset.genes[gidx],
                                                  self.dataset.shape,
@@ -658,36 +844,30 @@ class SSAMAnalysis(object):
 
     def calc_correlation_map(self, corr_size=3):
         """
-        calc_correlation_map(corr_size = 3)
-            Calculate local correlation map of the vector field.
+        Calculate local correlation map of the vector field.
 
-            Parameters
-            ----------
-            corr_size : int, optional
-                Size of square (or cube) that is used to compute the local correlation values.
-                This value should be an odd number.
+        :param corr_size: Size of square (or cube) that is used to compute the local correlation values.
+            This value should be an odd number.
+        :type corr_size: int
         """
         
         corr_map = calc_corrmap(self.dataset.vf, ncores=self.ncores, size=int(corr_size/2))
         self.dataset.corr_map = np.array(corr_map, copy=True)
         return
     
-    def find_localmax(self, search_size=21, min_norm=0, min_expression=0.05, mask=None):
+    def find_localmax(self, search_size=3, min_norm=0, min_expression=0, mask=None):
         """
-        find_localmax(search_size = 21, min_norm = 0)
-            Find local maxima vectors in the norm of the vector field.
+        Find local maxima vectors in the norm of the vector field.
 
-            Parameters
-            ----------
-            search_size : int, optional
-                Size of square (or cube) that is used to search for the local maximum values.
-                This value should be an odd number.
-            min_norm : float, optional
-                Minimum value of norm at the local maxima.
-            min_expression : float, optional
-                Minimum value of gene expression in a unit pixel at the local maxima.
+        :param search_size: Size of square (or cube in 3D) that is used to search for the local maxima.
+            This value should be an odd number.
+        :type search_size: int
+        :param min_norm: Minimum value of norm at the local maxima.
+        :type min_norm: float
+        :param min_expression: Minimum value of gene expression in a unit pixel at the local maxima.
             mask: numpy.ndarray, optional
-                If given, find vectors in the masked region, instead of the whole image.
+            If given, find vectors in the masked region, instead of the whole image.
+        :type min_expression: float
         """
 
         max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
@@ -706,18 +886,15 @@ class SSAMAnalysis(object):
 
     def expand_localmax(self, r=0.99, min_pixels=7, max_pixels=1000):
         """
-        expand_localmax(r = 0.99, p = 0.001, min_pixels = 7, max_pixels = 1000)
-            Merge the vectors nearby the local max vectors.
-            Only the vectors with the large Pearson correlation values are merged.
+        Merge the vectors nearby the local max vectors.
+        Only the vectors with the large Pearson correlation values are merged.
 
-            Parameters
-            ----------
-            r : float, optional
-                Minimum Pearson's correlation coefficient to look for the nearby vectors.
-            min_pixels : float, optional
-                Minimum number of pixels to merge.
-            max_pixels : float, optional
-                Maximum number of pixels to merge.
+        :param r: Minimum Pearson's correlation coefficient to look for the nearby vectors.
+        :type r: float
+        :param min_pixels: Minimum number of pixels to merge.
+        :type min_pixels: float
+        :param max_pixels: Maximum number of pixels to merge.
+        :type max_pixels: float
         """
         
         expanded_vecs = []
@@ -744,8 +921,14 @@ class SSAMAnalysis(object):
     
     def normalize_vectors_sctransform(self, use_expanded_vectors=False, normalize_vf=True):
         """
-        nomalize_vectors_rnb(use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
-            Normalize and regularize vectors using SCtransform
+        Normalize and regularize vectors using SCtransform
+
+        :param use_expanded_vectors: If True, use averaged vectors nearby local maxima
+            of the vector field.
+        :type use_expanded_vectors: bool
+        :param normalize_vf: If True, the vector field is also normalized
+            using the same parameters used to normalize the local maxima.
+        :type normalize_vf: bool
         """
         if use_expanded_vectors:
             vec = np.array(self.dataset.expanded_vectors, copy=True)
@@ -771,21 +954,18 @@ class SSAMAnalysis(object):
     
     def normalize_vectors(self, use_expanded_vectors=False, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
         """
-        nomalize_vectors(use_expanded_vectors = False, normalize_gene = False, normalize_vector = True, log_transform = True, scale = True)
-            Normalize and regularize vectors
-            
-            Parameters
-            ----------
-            use_expanded_vectors : bool (default: False)
-                If True, use averaged vectors nearby local maxima of the vector field.
-            normalize_gene: bool (default: True)
-                If True, normalize vectors by sum of each gene expression across all vectors.
-            normalize_vector: bool (default: True)
-                If True, normalize vectors by sum of all gene expression of each vector.
-            log_transform: bool (default: True)
-                If True, vectors are log transformed.
-            scale: bool (default: True)
-                If True, vectors are z-scaled (mean centered and scaled by stdev).
+        Normalize and regularize vectors
+
+        :param use_expanded_vectors: If True, use averaged vectors nearby local maxima of the vector field.
+        :type use_expanded_vectors: bool
+        :param normalize_gene: If True, normalize vectors by sum of each gene expression across all vectors.
+        :type normalize_gene: bool
+        :param normalize_vector: If True, normalize vectors by sum of all gene expression of each vector.
+        :type normalize_vector: bool
+        :param log_transform: If True, vectors are log transformed.
+        :type log_transform: bool
+        :param scale: If True, vectors are z-scaled (mean centered and scaled by stdev).
+        :type scale: bool
         """
         if use_expanded_vectors:
             vec = np.array(self.dataset.expanded_vectors, copy=True)
@@ -848,29 +1028,32 @@ class SSAMAnalysis(object):
             centroids_stdev.append(centroid_stdev)
         return centroids, centroids_stdev#, medoids
 
-    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=0.89, metric="euclidean", subclustering=False, centroid_correction_threshold=0.8, random_state=0):
+    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
+                        metric="correlation", subclustering=False, centroid_correction_threshold=0.8, random_state=0):
         """
-        cluster_vectors(method = "louvain", **kwargs)
-            Cluster the given vectors using the specified clustering method.
+        Cluster the given vectors using the specified clustering method.
 
-            Parameters
-            ----------
-            pca_dims : int (default: 10)
-                Number of principal componants used for clustering.
-            min_cluster_size: int, optional (default: 0)
-                Set minimum cluster size.
-            resolution: float, optional (default: 1.0)
-                Resolution for Louvain community detection.
-            prune: float, optional (default: 1.0/15.0)
-                Threshold for Jaccard index (weight of SNN network). If it is smaller than prune, it is set to zero.
-            snn_neighbors: int, optional (default: 30)
-                Number of neighbors for SNN network.
-            metric: string, optional (default: "euclidean")
-                Metric for calculation of distance between vectors in gene expression space.
-            subclustering: bool, optional (default: False)
-                If True, each cluster will be clustered once again with the same method to find more subclusters.
-            random_state: int or random state object, optional (default: 0)
-                Random seed or scikit-learn's random state object to replicate result
+        :param pca_dims: Number of principal componants used for clustering.
+        :type pca_dims: int
+        :param min_cluster_size: Set minimum cluster size.
+        :type min_cluster_size: int
+        :param resolution: Resolution for Louvain community detection.
+        :type resolution: float
+        :param prune: Threshold for Jaccard index (weight of SNN network). If it is smaller than prune, it is set to zero.
+        :type prune: float
+        :param snn_neighbors: Number of neighbors for SNN network.
+        :type snn_neighbors: int
+        :param max_correlation: Clusters with higher correlation to this value will be merged.
+        :type max_correlation: bool
+        :param metric: Metric for calculation of distance between vectors in gene expression space.
+        :type metric: str
+        :param subclustering: If True, each cluster will be clustered once again with the same method to find more subclusters.
+        :type subclustering: bool
+        :param centroid_correction_threshold: Centroid will be recalculated with the vectors
+            which have the correlation to the cluster medoid equal or higher than this value.
+        :type centroid_correction_threshold: float
+        :param random_state: Random seed or scikit-learn's random state object to replicate the same result
+        :type random_state: int or random state object
         """
         
         vecs_normalized = self.dataset.normalized_vectors
@@ -981,15 +1164,15 @@ class SSAMAnalysis(object):
     
     def exclude_and_merge_clusters(self, exclude=[], merge=[], centroid_correction_threshold=0.8):
         """
-        exclude_and_merge_clusters(exclude, merge)
-            Exclude bad clusters (including the vectors in the clusters), and merge similar clusters for the downstream analysis.
+        Exclude bad clusters (including the vectors in the clusters), and merge similar clusters for the downstream analysis.
 
-            Parameters
-            ----------
-            exclude: list(int)
-                List of cluster indices to be excluded.
-            merge: np.array(np.array(int)) or list(list(int))
-                List of list of cluster indices to be merged.
+        :param exclude: List of cluster indices to be excluded.
+        :type exclude: list(int)
+        :param merge: List of list of cluster indices to be merged.
+        :type merge: list(list(int))
+        :param centroid_correction_threshold: Centroid will be recalculated with the vectors
+            which have the correlation to the cluster medoid equal or higher than this value.
+        :type centroid_correction_threshold: float
         """
         exclude = list(exclude)
         merge = np.array(merge)
@@ -1029,14 +1212,11 @@ class SSAMAnalysis(object):
     
     def map_celltypes(self, centroids=None):
         """
-        map_celltypes(centroids = None)
-            Create correlation maps between the centroids and the vector field.
-            Each correlation map corresponds each cell type's image map.
+        Create correlation maps between the centroids and the vector field.
+        Each correlation map corresponds each cell type map.
 
-            Parameters
-            ----------
-            centroids: np.array(float) or list(np.array(float)), default: None
-                If given, map celltypes with the given cluster centroids. Ignore 'use_medoids' parameter.
+        :param centroids: If given, map celltypes with the given cluster centroids.
+        :type centroids: list(np.array(int))
         """
         
         if self.dataset.normalized_vf is None:
@@ -1061,7 +1241,27 @@ class SSAMAnalysis(object):
         self.dataset.celltype_maps = max_corr_idx
         return
 
-    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=100, filter_params={}, output_mask=None):
+    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=0, filter_params={}, output_mask=None):
+        """
+        Post-filter cell type maps created by `map_celltypes`.
+
+        :param min_r: minimum threshold of the correlation.
+        :type min_r: float
+        :param min_norm: minimum threshold of the vector norm.
+            If a string is given instead, then the threshold is automatically determined using
+            sklearn's `threshold filter functions <https://scikit-image.org/docs/dev/api/skimage.filters.html>`_ (The functions start with `threshold_`).
+        :type min_norm: str or float
+        :param fill_blobs: If true, then the algorithm automatically fill holes in each blob.
+        :type fill_blobs: bool
+        :param min_blob_area: The blobs with its area less than this value will be removed.
+        :type min_blob_area: int
+        :param filter_params: Filter parameters used for the sklearn's threshold filter functions.
+            Not used when `min_norm` is float.
+        :type filter_params: dict
+        :param output_mask: If given, the cell type maps will be filtered using the output mask.
+        :type output_mask: np.ndarray(bool)
+        """
+
         if isinstance(min_norm, str):
             # filter_params dict will be used for kwd params for filter_* functions.
             # some functions doesn't support param 'offset', therefore temporariliy remove it from here
@@ -1122,6 +1322,14 @@ class SSAMAnalysis(object):
         self.dataset.filtered_celltype_maps = filtered_ctmaps
         
     def bin_celltypemaps(self, step=10, radius=100):
+        """
+        Sweep a sphere window along a lattice on the image, and count the number of cell types in each window.
+
+        :param step: The lattice spacing.
+        :type step: int
+        :param radius: The radius of the sphere window.
+        :type radius: int
+        """
         def make_sphere_mask(radius):
             dia = radius*2+1
             X, Y, Z = np.ogrid[:dia, :dia, :dia]
@@ -1172,6 +1380,22 @@ class SSAMAnalysis(object):
         return
         
     def find_domains(self, centroid_indices=[], n_clusters=10, norm_thres=0, merge_thres=0.6, merge_remote=True):
+        """
+        Find domains in the image, using the result of `bin_celltypemaps`.
+
+        :param centroid_indices: The indices of centroids which will be used for determine tissue domains.
+        :type centroid_indices: list(int)
+        :param n_clusters: Initial number of clusters (domains) of agglomerative clustering.
+        :type n_clusters: int
+        :param norm_thres: Threshold for the total number of cell types in each window.
+            The window which contains the number of cell-type pixels less than this value will be ignored.
+        :type norm_thres: int
+        :param merge_thres: Threshold for merging domains. The centroids of the domains
+            which have higher correlation to this value will be merged.
+        :type merge_thres: float
+        :param merge_remote: If true, allow merging clusters that are not adjacent to each other.
+        :type merge_remote: bool
+        """
         def find_neighbors(m, l):
             neighbors = set()
             for x, y, z in zip(*np.where(m == l)):
@@ -1271,6 +1495,14 @@ class SSAMAnalysis(object):
         self.dataset.inferred_domains_cells = resized_layer_map2
      
     def exclude_and_merge_domains(self, exclude=[], merge=[]):
+        """
+        Manually exclude or merge domains.
+
+        :param exclude: Indices of the domains which will be excluded.
+        :type exclude: list(int)
+        :param merge: List of indices of the domains which will be merged.
+        :type merge: list(list(int))
+        """
         for i in exclude:
             self.dataset.inferred_domains[self.dataset.inferred_domains == i] = -1
             self.dataset.inferred_domains_cells[self.dataset.inferred_domains_cells == i] = -1
@@ -1289,6 +1521,9 @@ class SSAMAnalysis(object):
             self.dataset.inferred_domains_cells[self.dataset.inferred_domains_cells == i] = new_idx
 
     def calc_cell_type_compositions(self):
+        """
+        Calculate cell type compositions in each domain.
+        """
         cell_type_compositions = []
         for i in range(np.max(self.dataset.inferred_domains) + 1):
             counts = np.bincount(self.dataset.filtered_celltype_maps[self.dataset.inferred_domains == i] + 1, minlength=len(self.dataset.centroids) + 1)
@@ -1302,6 +1537,9 @@ class SSAMAnalysis(object):
         
         
     def calc_spatial_relationship(self):
+        """
+        Calculate spatial relationship between the domains using the result of `bin_celltypemap`.
+        """
         if self.dataset.celltype_binned_counts is None:
             raise AssertionError("Run 'bin_celltypemap()' method first!")
             
@@ -1312,27 +1550,3 @@ class SSAMAnalysis(object):
             sparel[idx, :] = np.sum(self.dataset.celltype_binned_counts[ct_centers == idx], axis=0)
 
         self.dataset.spatial_relationships = preprocessing.normalize(sparel, axis=1, norm='l1')
-        
-    def run_full_analysis_with_defaults(self):
-        """
-        run_full_analysis_with_defaults()
-            Run all analyses with the default parameters.
-        """
-        
-        self.run_kde()
-        self.find_localmax()
-        self.normalize_vectors()
-        self.cluster_vectors()
-        self.map_celltypes()
-        return
-
-if __name__ == "__main__":
-    import pickle
-    with open("/media/pjb7687/data/ssam_test/test.pickle", "rb") as f:
-        selected_genes, pos_dic, width, height, depth = pickle.load(f)
-    
-    dataset = SSAMDataset(selected_genes, [pos_dic[gene] for gene in selected_genes], width, height, depth)
-    analysis = SSAMAnalysis(dataset, save_dir="/media/pjb7687/data/ssam_test2", verbose=True)
-    analysis.run_kde_fast()
-    analysis.find_localmax()
-    analysis.expand_localmax()

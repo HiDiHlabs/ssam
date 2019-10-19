@@ -1,9 +1,15 @@
+
+.. role:: raw-html-m2r(raw)
+   :format: html
+
+
+
 SSAM (Spot-based Spatial cell-type Analysis by Multidimensional mRNA density estimation)
-============================================================================================
+========================================================================================
 
-Author: Jeongbin Park (jeongbin.park@charite.de)<sup>1,2</sup> and Wonyl Choi (wonyl@bu.edu)<sup>3</sup>
+Author: Jeongbin Park (jeongbin.park@charite.de)\ :raw-html-m2r:`<sup>1,2</sup>` and Wonyl Choi (wonyl@bu.edu)\ :raw-html-m2r:`<sup>3</sup>`
 
-<sup>1</sup>Digital Health Center, Berlin Institute of Health (BIH) and Charité – Universitätsmedizin, Berlin, Germany; <sup>2</sup>Faculty of Biosciences, Heidelberg University, Heidelberg, Germany; <sup>3</sup>Department of Computer Science, Boston University, Boston, the United States of America
+:raw-html-m2r:`<sup>1</sup>`\ Digital Health Center, Berlin Institute of Health (BIH) and Charité – Universitätsmedizin, Berlin, Germany; :raw-html-m2r:`<sup>2</sup>`\ Faculty of Biosciences, Heidelberg University, Heidelberg, Germany; :raw-html-m2r:`<sup>3</sup>`\ Department of Computer Science, Boston University, Boston, the United States of America
 
 (Not referring this :laughing:: https://en.wikipedia.org/wiki/Ssam)
 
@@ -15,14 +21,15 @@ Please also check our example Jupyter notebooks here: https://github.com/eilslab
 Prerequisites
 =============
 
-In addition to this package, SSAM requires a local R installation with pre-installed packages `feather` and `sctransform`.
+In addition to this package, SSAM requires a local R installation with pre-installed packages ``feather`` and ``sctransform``.
 
 Install
-============
+=======
 
-```
-$ pip install ssam
-```
+.. code-block::
+
+   $ pip install ssam
+
 
 Citations
 =========
@@ -45,4 +52,4 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU Affero General Public License for more details.
 
 You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+along with this program.  If not, see https://www.gnu.org/licenses/.
