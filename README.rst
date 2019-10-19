@@ -31,6 +31,11 @@ Install
    $ pip install ssam
 
 
+Documentation
+=============
+
+https://ssam.readthedocs.io/en/latest/
+
 Citations
 =========
 
