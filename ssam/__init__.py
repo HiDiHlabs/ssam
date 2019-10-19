@@ -589,7 +589,6 @@ class SSAMDataset(object):
         :param pctdistance: The distance from center of the pie to the labels.
         :type pctdistance: float
         :param kwargs: More kewward arguments for the matplotlib.pyplot.pie.
-        :type kwargs: dict
         """
         if cell_type_colors is None:
             cmap = plt.get_cmap(cell_type_cmap)
@@ -613,9 +612,7 @@ class SSAMDataset(object):
         :param cluster_labels: x- and y-axis label of the heatmap.
         :type cluster_labels: list(str)
         :param args: More arguments for the seaborn.heatmap.
-        :type args: tuple
-        :param args: More keyword arguments for the seaborn.heatmap.
-        :type kwargs: dict
+        :param kwargs: More keyword arguments for the seaborn.heatmap.
         """
         sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)    
 
