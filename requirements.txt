@@ -1,0 +1,10 @@
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+scikit-learn
+umap-learn
+python-louvain
+sparse
+scikit-image
