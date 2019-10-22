@@ -15,7 +15,7 @@ Please also check our example Jupyter notebooks here: https://github.com/eilslab
 Prerequisites
 =============
 
-In addition to this package, SSAM requires a local R installation with pre-installed packages ``feather`` and ``sctransform``.
+Currently SSAM was only tested with Python 3 in Linux environment. In addition to this package, SSAM requires a local R installation with pre-installed packages ``feather`` and ``sctransform``.
 
 Install
 =======
