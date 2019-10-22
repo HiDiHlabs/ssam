@@ -39,7 +39,7 @@ https://ssam.readthedocs.io/en/latest/
 Citations
 =========
 
-https://www.biorxiv.org/content/10.1101/800748v1
+J Park, W Choi, S Tiesmeyer, B Long, LE Borm, E Garren, TN Nguyen, S Codeluppi, M Schlesner, B Tasic, R Eils, N Ishaque. "Segmentation-free inference of cell types from in situ transcriptomics data." *bioRxiv* **800748**. doi: https://doi.org/10.1101/800748
 
 License
 =======
