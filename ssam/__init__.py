@@ -159,7 +159,7 @@ class SSAMDataset(object):
     @vf.setter
     def vf(self, vf):
         self.__vf = vf
-        self.__vf_norm = None    
+        self.__vf_norm = None
         
     @property
     def vf_norm(self):
@@ -618,6 +618,14 @@ class SSAMDataset(object):
         sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)    
 
     def get_celltype_correlation(self, idx):
+        """
+        Get correlation values of a cell type map between the given cluster's centroid to the vector field.
+        
+        :param idx: Index of a cluster
+        :type idx: int
+        :return: Correlation values of a cell type map of the specified cluster's centroid
+        :rtype: numpy.ndarray
+        """
         rtn = np.zeros_like(self.max_correlations) - 1
         rtn[self.celltype_maps == idx] = self.max_correlations[self.celltype_maps == idx]
         return rtn
