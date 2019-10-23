@@ -617,6 +617,11 @@ class SSAMDataset(object):
         """
         sns.heatmap(self.spatial_relationships, *args, xticklabels=cluster_labels, yticklabels=cluster_labels, **kwargs)    
 
+    def get_celltype_correlation(self, idx):
+        rtn = np.zeros_like(self.max_correlations) - 1
+        rtn[self.celltype_maps == idx] = self.max_correlations[self.celltype_maps == idx]
+        return rtn
+    
         
 class SSAMAnalysis(object):
     """
