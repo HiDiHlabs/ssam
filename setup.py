@@ -40,5 +40,6 @@ setuptools.setup(
         "python-louvain",
         "sparse",
         "scikit-image",
+        "pyarrow",
     ]
 )
