@@ -36,7 +36,7 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
-def __fast_gaussian_kde(args):
+def _fast_gaussian_kde(args):
     # TODO: 1) support sampling distance
     #       2) support other kernels
     (bandwidth, save_dir, gene_name, shape, locations, sampling_distance) = args
@@ -827,7 +827,7 @@ class SSAMAnalysis(object):
         
         if len(idcs) > 0:
             with closing(Pool(self.ncores, maxtasksperchild=1)) as p:
-                res = p.imap(__fast_gaussian_kde,[(bandwidth,
+                res = p.imap(_fast_gaussian_kde,[(bandwidth,
                                                  self.save_dir,
                                                  self.dataset.genes[gidx],
                                                  self.dataset.shape,
