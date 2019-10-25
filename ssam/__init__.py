@@ -930,7 +930,7 @@ class SSAMAnalysis(object):
         self.dataset.valid_local_maxs = valid_pos_list
         return
     
-    def normalize_vectors_sctransform(self, use_expanded_vectors=False, normalize_vf=True):
+    def normalize_vectors_sctransform(self, use_expanded_vectors=False, normalize_vf=True, vst_kwargs={}):
         """
         Normalize and regularize vectors using SCtransform
 
@@ -940,13 +940,15 @@ class SSAMAnalysis(object):
         :param normalize_vf: If True, the vector field is also normalized
             using the same parameters used to normalize the local maxima.
         :type normalize_vf: bool
+        :param vst_kwargs: Optional keywords arguments for sctransform's vst function.
+        :type vst_kwargs: dict
         """
         if use_expanded_vectors:
             vec = np.array(self.dataset.expanded_vectors, copy=True)
         else:
             vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
         
-        norm_vec, fit_params = run_sctransform(vec)
+        norm_vec, fit_params = run_sctransform(vec, **vst_kwargs)
         self.dataset.normalized_vectors = np.array(norm_vec)
         
         if normalize_vf:
