@@ -735,8 +735,7 @@ class SSAMAnalysis(object):
 
             pool = None
             for gidx, gene_name in enumerate(self.dataset.genes):
-                
-                filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+                pdf_filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
                     ('%f' % sampling_distance).rstrip('0').rstrip('.'),
                     ('%f' % bandwidth).rstrip('0').rstrip('.'),
                     gene_name)
