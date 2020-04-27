@@ -1,3 +1,5 @@
+import zarr
+from numcodecs import blosc
 import dask.array as da
 import numpy as np
 import pandas as pd
@@ -80,9 +82,12 @@ class SSAMDataset(object):
     :type height: float
     :param depth: Depth of the image in um. Depth == 1 means 2D image.
     :type depth: float
+    :param save_dir: Directory to store intermediate data (e.g. density / vector field).
+        Any data which already exists will be loaded and reused.
+    :type save_dir: str
     """
         
-    def __init__(self, genes, locations, width, height, depth=1):
+    def __init__(self, genes, locations, width, height, depth=1, save_dir=""):
         if depth < 1 or width < 1 or height < 1:
             raise ValueError("Invalid image dimension")
         self.shape = (width, height, depth)
@@ -107,6 +112,11 @@ class SSAMDataset(object):
         self.normalized_vf = None
         self.excluded_clusters = None
         self.celltype_binned_counts = None
+        if len(save_dir) == 0:
+            save_dir = mkdtemp()
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        self.save_dir = save_dir
 
     @property
     def vf(self):
@@ -129,7 +139,7 @@ class SSAMDataset(object):
         if self.vf is None:
             return None
         if self._vf_norm is None:
-            self._vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
+            self._vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1).persist()
         return self._vf_norm
     
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
@@ -599,14 +609,10 @@ class SSAMAnalysis(object):
     :param ncores: Number of cores for parallel computation. If a negative value is given,
         ((# of all available cores on system) - abs(ncores)) cores will be used.
     :type ncores: int
-    :param save_dir: Directory to store intermediate data (e.g. density / vector field).
-        Any data which already exists will be loaded and reused.
-    :type save_dir: str
     :param verbose: If True, then it prints out messages during the analysis.
     :type verbose: bool
     """
-    def __init__(self, dataset, ncores=-1, save_dir="", verbose=False):
-        
+    def __init__(self, dataset, ncores=-1, verbose=False):
         self.dataset = dataset
         if not ncores > 0:
             ncores += multiprocessing.cpu_count()
@@ -615,28 +621,21 @@ class SSAMAnalysis(object):
         if not ncores > 0:
             raise ValueError("Invalid number of cores.")
         self.ncores = ncores
-        self.use_savedir = True
-        if len(save_dir) == 0:
-            save_dir = mkdtemp()
-            self.use_savedir = False
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        self.save_dir = save_dir
         self.verbose = verbose
 
     def _m(self, message):
         if self.verbose:
-            print(message)
+            print(message, flush=True)
 
-    def run_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, re_run=False, use_mmap=False):
+    def run_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, re_run=False, use_mmap=False):
         """
-        Run KDE faster than `run_kde` method. This method uses precomputed kernels to estimate density of mRNA.
+        Run KDE. This method uses precomputed kernels to estimate density of mRNA by default. Set `prune_coefficient` negative to disable this behavior.
         :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
         :type kernel: str
         :param bandwidth: Parameter to adjust width of kernel.
             Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
         :type bandwidth: float
-        :param sampling_distance: Grid spacing in um. Currently only 1 um is supported.
+        :param sampling_distance: Grid spacing in um.
         :type sampling_distance: float
         :param re_run: Recomputes KDE, ignoring all existing precomputed densities in the data directory.
         :type re_run: bool
@@ -644,11 +643,9 @@ class SSAMAnalysis(object):
         :type use_mmap: bool
         """
         if kernel != 'gaussian':
-            raise NotImplementedError('Only Gaussian kernel is supported.')
-        if sampling_distance != 1.0:
-            raise NotImplementedError('Sampling distance should be 1.')
+            raise NotImplementedError('Only Gaussian kernel is supported for now.')
 
-        pdf_filenames = [os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.zarr'%(
+        pdf_filenames = [os.path.join(self.dataset.save_dir, 'pdf_sd%s_bw%s_%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.'),
             self.dataset.genes[gidx])
@@ -661,15 +658,19 @@ class SSAMAnalysis(object):
                 z = zarr.open(pdf_filenames[gidx], mode='r')
             else:
                 self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
-                coords, data = calc_fast_kde(bandwidth,
-                                             self.dataset.locations[gidx][:, 0],
-                                             self.dataset.locations[gidx][:, 1],
-                                             self.dataset.locations[gidx][:, 2],
-                                             self.dataset.shape)
+                kde_shape = tuple(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int))
+                coords, data = calc_kde(bandwidth/sampling_distance,
+                                        self.dataset.locations[gidx][:, 0]/sampling_distance,
+                                        self.dataset.locations[gidx][:, 1]/sampling_distance,
+                                        self.dataset.locations[gidx][:, 2]/sampling_distance,
+                                        kde_shape,
+                                        prune_coefficient,
+                                        0,
+                                        self.ncores)
                 self._m("Saving KDE for gene %s..."%self.dataset.genes[gidx])
                 blosc.set_nthreads(self.ncores)
                 store = zarr.DirectoryStore(pdf_filenames[gidx])
-                z = zarr.zeros(shape=self.dataset.shape, store=store, dtype='float32', overwrite=True)
+                z = zarr.zeros(shape=kde_shape, store=store, dtype='float32', overwrite=True)
                 z.set_coordinate_selection(tuple(coords), data)
             pdfs.append(z)
         self.dataset.vf = da.stack(pdfs, axis=3)
