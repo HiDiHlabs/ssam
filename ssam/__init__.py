@@ -984,7 +984,7 @@ class SSAMAnalysis(object):
         else:
             vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
         if normalize_gene:
-            vec = preprocessing.normalize(vec, norm=norm, axis=0) * size_after_normalization  # Normalize per gene
+            vec = preprocessing.normalize(vec, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
         if normalize_vector:
             vec = preprocessing.normalize(vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
         if normalize_median:
