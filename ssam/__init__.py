@@ -1,3 +1,4 @@
+import dask.array as da
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -35,48 +36,6 @@ from PIL import Image
 from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
-
-def _fast_gaussian_kde(args):
-    # TODO: 1) support sampling distance
-    #       2) support other kernels
-    (bandwidth, save_dir, gene_name, shape, locations, sampling_distance) = args
-    
-    print('Processing gene %s...'%gene_name)
-
-    maxdist = int(bandwidth * 4)
-    span = np.linspace(-maxdist,maxdist,maxdist*2+1)
-    X, Y, Z = np.meshgrid(span,span,span)
-    
-    def create_kernel(x, y, z):
-        X_=(-x+X)/bandwidth
-        Y_=(-y+Y)/bandwidth
-        Z_=(-z+Z)/bandwidth
-        return np.exp(-0.5*(X_**2+Y_**2+Z_**2))
-    
-    pd = np.zeros(shape)
-    for loc in locations:
-        int_loc = [int(i) for i in loc]
-        rem_loc = [i%1 for i in loc]
-
-        kernel = create_kernel(*rem_loc)
-
-        pos_start = [i - maxdist for i in int_loc]
-        pos_end = [i + maxdist + 1 for i in int_loc]
-
-        kernel_pos_start = [abs(i) if i < 0 else 0 for i in pos_start]
-        kernel_pos_end = [maxdist*2+1 - (i-j) if i > j else maxdist*2+1 for i, j in zip(pos_end, shape)]
-
-        pos_start = [0 if i < 0 else i for i in pos_start]
-        pos_end = [j if i >= j else i for i, j in zip(pos_end, shape)]
-
-        slices = tuple([slice(i, j) for i, j in zip(pos_start, pos_end)])
-        kernel_slices = tuple([slice(i, j) for i, j in zip(kernel_pos_start, kernel_pos_end)])
-        pd[slices] += kernel.swapaxes(0, 1)[kernel_slices]
-
-    pd /= pd.sum()
-    pd *= len(locations)
-    
-    return pd
 
 def run_sctransform(data, **kwargs):
     """
@@ -137,8 +96,8 @@ class SSAMDataset(object):
                 self.locations.append(np.concatenate((l, np.zeros([l.shape[0], 1])), axis=1))
             else:
                 raise ValueError("Invalid mRNA locations")
-        self.__vf = None
-        self.__vf_norm = None
+        self._vf = None
+        self._vf_norm = None
         self.normalized_vectors = None
         self.expanded_vectors = None
         self.cluster_labels = None
@@ -154,12 +113,12 @@ class SSAMDataset(object):
         """
         Vector field as a numpy.ndarray.
         """
-        return self.__vf
+        return self._vf
     
     @vf.setter
     def vf(self, vf):
-        self.__vf = vf
-        self.__vf_norm = None
+        self._vf = vf
+        self._vf_norm = None
         
     @property
     def vf_norm(self):
@@ -169,9 +128,9 @@ class SSAMDataset(object):
 
         if self.vf is None:
             return None
-        if self.__vf_norm is None:
-            self.__vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
-        return self.__vf_norm
+        if self._vf_norm is None:
+            self._vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1)
+        return self._vf_norm
     
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
         """
@@ -665,129 +624,13 @@ class SSAMAnalysis(object):
         self.save_dir = save_dir
         self.verbose = verbose
 
-    def __m__(self, message):
+    def _m(self, message):
         if self.verbose:
             print(message)
-            
-    def run_kde(self, kernel="gaussian", bandwidth=2.5, sampling_distance=1.0, use_mmap=False):
-        """
-        Run KDE to estimate density of mRNA.
 
-        :param kernel: Kernel for density estimation.
-        :type kernel: str
-        :param bandwidth: Parameter to adjust width of kernel.
-            Set it 2.5 to make FWTM of Gaussian kernel to be ~10um (assume that avg. cell diameter is ~10um).
-        :type bandwidth: float
-        :param sampling_distance: Grid spacing in um.
-        :type sampling_distance: float
-        :param use_mmap: Use MMAP to reduce memory usage during analysis.
-            Turning on this option can reduce the amount of memory used by SSAM analysis, but also lower the analysis speed.
-        :type use_mmap: bool
-        """
-        def save_pickle(fn, o):
-            with open(fn, "wb") as f:
-                return pickle.dump(o, f, protocol=4)
-        def load_pickle(fn):
-            with open(fn, "rb") as f:
-                return pickle.load(f)
-        
-        steps = [int(np.ceil(e / sampling_distance)) for e in self.dataset.shape]
-        total_steps = np.prod(steps)
-        vf_shape = tuple(steps + [len(self.dataset.genes), ])
-        vf_filename = os.path.join(self.save_dir, 'vf_sd%s_bw%s'%(
-            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.')
-        ))
-        if (use_mmap and not os.path.exists(vf_filename + '.dat')) or \
-                (not use_mmap and not os.path.exists(vf_filename + '.pkl') and not os.path.exists(vf_filename + '.dat')):
-            # If VF file doesn't exist, then run KDE
-            if use_mmap:
-                vf = np.memmap(vf_filename + '.dat.tmp', dtype='double', mode='w+', shape=vf_shape)
-            else:
-                vf = np.zeros(vf_shape)
-            chunksize = min(int(np.ceil(total_steps / self.ncores)), 100000)
-            def yield_chunk():
-                chunk = np.zeros(shape=[chunksize, len(steps)], dtype=int)
-                cnt = 0
-                remaining_cnt = total_steps
-                for x in range(steps[0]):
-                    for y in range(steps[1]):
-                        for z in range(steps[2]):
-                            chunk[cnt, :] = [x, y, z]
-                            cnt += 1
-                            if cnt == chunksize:
-                                yield chunk
-                                remaining_cnt -= cnt
-                                cnt = 0
-                                chunk = np.zeros(shape=[min(chunksize, remaining_cnt), len(steps)], dtype=int)
-                if cnt > 0:
-                    yield chunk
-
-            def yield_chunks():
-                chunks = []
-                for chunk in yield_chunk():
-                    chunks.append(chunk)
-                    if len(chunks) == self.ncores:
-                        yield chunks
-                        chunks = []
-                if len(chunks) > 0:
-                    yield chunks
-
-            pool = None
-            for gidx, gene_name in enumerate(self.dataset.genes):
-                pdf_filename = os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
-                    ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-                    ('%f' % bandwidth).rstrip('0').rstrip('.'),
-                    gene_name)
-                )
-                if os.path.exists(pdf_filename):
-                    self.__m__("Loading %s..."%gene_name)
-                    pdf = np.load(pdf_filename)
-                else:
-                    self.__m__("Running KDE for %s..."%gene_name)
-                    pdf = np.zeros(shape=vf_shape[:-1])
-                    if kernel != "gaussian":
-                        kde = KernelDensity(kernel=kernel, bandwidth=bandwidth).fit(self.dataset.locations[gidx])
-                        if pool is None:
-                            pool = multiprocessing.Pool(self.ncores)
-                    else:
-                        X, Y, Z = [self.dataset.locations[gidx][:, i] for i in range(3)]
-                    for chunks in yield_chunks():
-                        if kernel == "gaussian":
-                            pdf_chunks = [calc_kde(bandwidth, X, Y, Z, chunk[:, 0], chunk[:, 1], chunk[:, 2], 0, self.ncores) for chunk in chunks]
-                        else:
-                            pdf_chunks = pool.map(kde.score_samples, [chunk * sampling_distance for chunk in chunks])
-                        for pdf_chunk, pos_chunk in zip(pdf_chunks, chunks):
-                            if kernel == "gaussian":
-                                pdf[pos_chunk[:, 0], pos_chunk[:, 1], pos_chunk[:, 2]] = pdf_chunk
-                            else:
-                                pdf[pos_chunk[:, 0], pos_chunk[:, 1], pos_chunk[:, 2]] = np.exp(pdf_chunk)
-                    pdf /= np.sum(pdf)
-                    np.save(pdf_filename, pdf)
-                vf[..., gidx] = pdf * len(self.dataset.locations[gidx])
-            if use_mmap:
-                vf.flush()
-                os.rename(vf_filename + '.dat.tmp', vf_filename + '.dat')
-                vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
-            elif self.use_savedir:
-                save_pickle(vf_filename + '.pkl', vf)
-        elif not use_mmap:
-            if os.path.exists(vf_filename + '.pkl'):
-                vf = load_pickle(vf_filename + '.pkl')
-            else: # == os.path.exists(vf_filename + '.dat'):
-                vf_tmp = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
-                vf = np.array(vf_tmp, copy=True)
-                if self.use_savedir:
-                    save_pickle(vf_filename + '.pkl', vf)
-        elif use_mmap:
-            vf = np.memmap(vf_filename + '.dat', dtype='double', mode='r', shape=vf_shape)
-        self.dataset.vf = vf
-        return
-   
-    def run_fast_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, re_run=False, use_mmap=False):
+    def run_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, re_run=False, use_mmap=False):
         """
         Run KDE faster than `run_kde` method. This method uses precomputed kernels to estimate density of mRNA.
-
         :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
         :type kernel: str
         :param bandwidth: Parameter to adjust width of kernel.
@@ -804,53 +647,33 @@ class SSAMAnalysis(object):
             raise NotImplementedError('Only Gaussian kernel is supported.')
         if sampling_distance != 1.0:
             raise NotImplementedError('Sampling distance should be 1.')
-        if use_mmap:
-            raise NotImplementedError('MMAP is not supported yet.')
-            
-        def save_pickle(fn, o):
-            with open(fn, "wb") as f:
-                return pickle.dump(o, f, protocol=4)
-        def load_pickle(fn):
-            with open(fn, "rb") as f:
-                return pickle.load(f)
 
-        vf_filename = os.path.join(self.save_dir, 'vf_sd%s_bw%s.pkl'%(
-            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.')
-        ))
-        
-        if os.path.exists(vf_filename) and not re_run:
-            self.dataset.vf = load_pickle(vf_filename)
-            return
-
-        self.dataset.vf = np.zeros(self.dataset.shape+(len(self.dataset.genes),))
-        idcs = np.argsort([len(i) for i in self.dataset.locations])[::-1]
-        pdf_filenames = [os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.npy'%(
+        pdf_filenames = [os.path.join(self.save_dir, 'pdf_sd%s_bw%s_%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.'),
             self.dataset.genes[gidx])
-        ) for gidx in idcs]
+        ) for gidx in range(len(self.dataset.genes))]
 
-        if not re_run:
-            idcs = np.where([not os.path.exists(fn) for fn in pdf_filenames])[0]
-            for gidx in np.where([os.path.exists(fn) for fn in pdf_filenames])[0]:
-                print("Loading gene %s..."%self.dataset.genes[gidx])
-                self.dataset.vf[..., gidx] = np.load(pdf_filenames[gidx])
-        
-        if len(idcs) > 0:
-            with closing(Pool(self.ncores, maxtasksperchild=1)) as p:
-                res = p.imap(_fast_gaussian_kde,[(bandwidth,
-                                                 self.save_dir,
-                                                 self.dataset.genes[gidx],
-                                                 self.dataset.shape,
-                                                 self.dataset.locations[gidx],
-                                                 sampling_distance) for gidx in idcs])
-                for gidx, pd in zip(idcs, res): # imap returns result in the same order as the input array
-                    self.dataset.vf[..., gidx] = pd
-                    np.save(pdf_filenames[gidx], pd)
-                p.close()
-                p.join()
-        save_pickle(vf_filename, self.dataset.vf)
+        pdfs = []
+        for gidx in range(len(self.dataset.genes)):
+            if os.path.exists(pdf_filenames[gidx]) and not re_run:
+                self._m("Loading KDE for gene %s..."%self.dataset.genes[gidx])
+                z = zarr.open(pdf_filenames[gidx], mode='r')
+            else:
+                self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
+                coords, data = calc_fast_kde(bandwidth,
+                                             self.dataset.locations[gidx][:, 0],
+                                             self.dataset.locations[gidx][:, 1],
+                                             self.dataset.locations[gidx][:, 2],
+                                             self.dataset.shape)
+                self._m("Saving KDE for gene %s..."%self.dataset.genes[gidx])
+                blosc.set_nthreads(self.ncores)
+                store = zarr.DirectoryStore(pdf_filenames[gidx])
+                z = zarr.zeros(shape=self.dataset.shape, store=store, dtype='float32', overwrite=True)
+                z.set_coordinate_selection(tuple(coords), data)
+            pdfs.append(z)
+        self.dataset.vf = da.stack(pdfs, axis=3)
+        return
 
     def calc_correlation_map(self, corr_size=3):
         """
@@ -890,7 +713,7 @@ class SSAMAnalysis(object):
         if mask is not None:
             max_mask &= mask
         local_maxs = np.where(max_mask)
-        self.__m__("Found %d local max vectors."%len(local_maxs[0]))
+        self._m("Found %d local max vectors."%len(local_maxs[0]))
         self.dataset.local_maxs = local_maxs
         return
 
@@ -908,7 +731,7 @@ class SSAMAnalysis(object):
         """
         
         expanded_vecs = []
-        self.__m__("Expanding local max vectors...")
+        self._m("Expanding local max vectors...")
         fill_dx = np.meshgrid(range(3), range(3), range(3))
         fill_dx = np.array(list(zip(*[np.ravel(e) - 1 for e in fill_dx])))
         mask = np.zeros(self.dataset.vf.shape[:-1]) # TODO: sparse?
@@ -922,8 +745,8 @@ class SSAMAnalysis(object):
                 valid_pos_list.append(local_pos)
                 expanded_vecs.append(np.sum(self.dataset.vf[filled_pos], axis=0))
             if cnt % 100 == 0:
-                self.__m__("Processed %d/%d..."%(cnt, nlocalmaxs))
-        self.__m__("Processed %d/%d..."%(cnt, nlocalmaxs))
+                self._m("Processed %d/%d..."%(cnt, nlocalmaxs))
+        self._m("Processed %d/%d..."%(cnt, nlocalmaxs))
         self.dataset.expanded_vectors = np.array(expanded_vecs)
         self.dataset.expanded_mask = mask
         self.dataset.valid_local_maxs = valid_pos_list
@@ -1147,7 +970,7 @@ class SSAMAnalysis(object):
         self.dataset.centroids_stdev = np.array(centroids_stdev)
         #self.dataset.medoids = np.array(medoids)
         
-        self.__m__("Found %d clusters"%len(centroids))
+        self._m("Found %d clusters"%len(centroids))
         return
 
     def rescue_cluster(self, gene_names, expression_thresholds=[]):
