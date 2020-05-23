@@ -117,7 +117,7 @@ class SSAMDataset(object):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         self.save_dir = save_dir
-
+    
     @property
     def vf(self):
         """
@@ -139,7 +139,7 @@ class SSAMDataset(object):
         if self.vf is None:
             return None
         if self._vf_norm is None:
-            self._vf_norm = np.sum(self.vf, axis=len(self.vf.shape) - 1).persist()
+            self._vf_norm = sum(self.vf).persist()
         return self._vf_norm
     
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
@@ -672,8 +672,8 @@ class SSAMAnalysis(object):
                 store = zarr.DirectoryStore(pdf_filenames[gidx])
                 z = zarr.zeros(shape=kde_shape, store=store, dtype='float32', overwrite=True)
                 z.set_coordinate_selection(tuple(coords), data)
-            pdfs.append(z)
-        self.dataset.vf = da.stack(pdfs, axis=3)
+            pdfs.append(da.from_zarr(z))
+        self.dataset.vf = pdfs
         return
 
     def calc_correlation_map(self, corr_size=3):
@@ -707,53 +707,23 @@ class SSAMAnalysis(object):
         max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
         max_mask &= self.dataset.vf_norm > min_norm
         if min_expression > 0:
-            exp_mask = np.zeros_like(max_mask)
+            exp_mask = da.zeros_like(max_mask)
             for i in range(len(self.dataset.genes)):
-                exp_mask |= self.dataset.vf[..., i] > min_expression
+                exp_mask |= self.dataset.vf[i] > min_expression
             max_mask &= exp_mask
         if mask is not None:
             max_mask &= mask
-        local_maxs = np.where(max_mask)
+        local_maxs = np.where(max_mask.compute())
         self._m("Found %d local max vectors."%len(local_maxs[0]))
         self.dataset.local_maxs = local_maxs
         return
-
-    def expand_localmax(self, r=0.99, min_pixels=7, max_pixels=1000):
-        """
-        Merge the vectors nearby the local max vectors.
-        Only the vectors with the large Pearson correlation values are merged.
-
-        :param r: Minimum Pearson's correlation coefficient to look for the nearby vectors.
-        :type r: float
-        :param min_pixels: Minimum number of pixels to merge.
-        :type min_pixels: float
-        :param max_pixels: Maximum number of pixels to merge.
-        :type max_pixels: float
-        """
-        
-        expanded_vecs = []
-        self._m("Expanding local max vectors...")
-        fill_dx = np.meshgrid(range(3), range(3), range(3))
-        fill_dx = np.array(list(zip(*[np.ravel(e) - 1 for e in fill_dx])))
-        mask = np.zeros(self.dataset.vf.shape[:-1]) # TODO: sparse?
-        nlocalmaxs = len(self.dataset.local_maxs[0])
-        valid_pos_list = []
-        for cnt, idx in enumerate(range(nlocalmaxs), start=1):
-            local_pos = tuple(i[idx] for i in self.dataset.local_maxs)
-            filled_pos = tuple(zip(*flood_fill(local_pos, self.dataset.vf, r, min_pixels, max_pixels)))
-            if len(filled_pos) > 0:
-                mask[filled_pos] = 1
-                valid_pos_list.append(local_pos)
-                expanded_vecs.append(np.sum(self.dataset.vf[filled_pos], axis=0))
-            if cnt % 100 == 0:
-                self._m("Processed %d/%d..."%(cnt, nlocalmaxs))
-        self._m("Processed %d/%d..."%(cnt, nlocalmaxs))
-        self.dataset.expanded_vectors = np.array(expanded_vecs)
-        self.dataset.expanded_mask = mask
-        self.dataset.valid_local_maxs = valid_pos_list
-        return
     
-    def normalize_vectors_sctransform(self, use_expanded_vectors=False, normalize_vf=True, vst_kwargs={}):
+    def downsample_localmax(self, max_count, ):
+        ds_indices = np.random.choice(len(self.dataset.local_maxs[0]), max_count)
+        self.dataset.local_maxs = tuple([self.dataset.local_maxs[i][ds_indices] for i in range(3)])
+        return
+
+    def normalize_vectors_sctransform(self, normalize_vf=True, vst_kwargs={}):
         """
         Normalize and regularize vectors using SCtransform
 
@@ -766,21 +736,23 @@ class SSAMAnalysis(object):
         :param vst_kwargs: Optional keywords arguments for sctransform's vst function.
         :type vst_kwargs: dict
         """
-        if use_expanded_vectors:
-            vec = np.array(self.dataset.expanded_vectors, copy=True)
-        else:
-            vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
-        
+        self._m("Selecting vectors...")
+        localmax_mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
+        localmax_mask[self.dataset.local_maxs] = True
+        comps = [self.dataset.vf[i].reshape(-1)[np.ravel(localmax_mask)] for i in range(len(self.dataset.vf))]
+        vecs = np.stack(comps, axis=1).compute()
+
+        self._m("Running scTransform...")
         norm_vec, fit_params = run_sctransform(vec, **vst_kwargs)
         self.dataset.normalized_vectors = np.array(norm_vec)
         
         if normalize_vf:
-            vf_nonzero = self.dataset.vf[self.dataset.vf_norm > 0]
-            nvec = vf_nonzero.shape[0]
+            self._m("Normalizing vector field...")
+            vf_nonzero_mask = self.dataset.vf_norm > 0
+            nvec = np.sum(np.ravel(vf_nonzero_mask)).compute()
             fit_params = np.array(fit_params).T
             regressor_data = np.ones([nvec, 2])
             regressor_data[:, 1] = np.log10(np.sum(vf_nonzero, axis=1))
-            
             mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
             with np.errstate(divide='ignore', invalid='ignore'):
                 res = (vf_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
@@ -788,12 +760,10 @@ class SSAMAnalysis(object):
             self.dataset.normalized_vf[self.dataset.vf_norm > 0] = np.nan_to_num(res)
         return
     
-    def normalize_vectors(self, use_expanded_vectors=False, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
+    def normalize_vectors(self, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
         """
         Normalize and regularize vectors
 
-        :param use_expanded_vectors: If True, use averaged vectors nearby local maxima of the vector field.
-        :type use_expanded_vectors: bool
         :param normalize_gene: If True, normalize vectors by sum of each gene expression across all vectors.
         :type normalize_gene: bool
         :param normalize_vector: If True, normalize vectors by sum of all gene expression of each vector.
@@ -803,10 +773,10 @@ class SSAMAnalysis(object):
         :param scale: If True, vectors are z-scaled (mean centered and scaled by stdev).
         :type scale: bool
         """
-        if use_expanded_vectors:
-            vec = np.array(self.dataset.expanded_vectors, copy=True)
-        else:
-            vec = np.array(self.dataset.vf[self.dataset.local_maxs], copy=True)
+        localmax_mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
+        localmax_mask[self.dataset.local_maxs] = True
+        comps = [self.dataset.vf[i].reshape(-1)[np.ravel(localmax_mask)] for i in range(len(self.dataset.vf))]
+        vec = np.stack(comps, axis=1).compute()
         if normalize_gene:
             vec = preprocessing.normalize(vec, norm=norm, axis=0) * size_after_normalization  # Normalize per gene
         if normalize_vector:
