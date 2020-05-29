@@ -57,6 +57,7 @@ def run_sctransform(data, **kwargs):
     else:
         vst_opt_str = ', ' + ', '.join(vst_options)
     with TemporaryDirectory() as tmpdirname:
+        tmpdirname = "/home/pjb7687/test"
         ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
         df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
         df.to_feather(ifn)
@@ -64,7 +65,7 @@ def run_sctransform(data, **kwargs):
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
             f.write(rcmd)
-        subprocess.check_output("Rscript " + rfn, shell=True)
+        subprocess.run("Rscript " + rfn, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return pd.read_feather(ofn), pd.read_feather(pfn)
 
 class SSAMDataset(object):
@@ -82,12 +83,12 @@ class SSAMDataset(object):
     :type height: float
     :param depth: Depth of the image in um. Depth == 1 means 2D image.
     :type depth: float
-    :param save_dir: Directory to store intermediate data (e.g. density / vector field).
+    :param save_dir: Directory to store intermediate data as zarr groups (e.g. density / vector field).
         Any data which already exists will be loaded and reused.
     :type save_dir: str
     """
         
-    def __init__(self, genes, locations, width, height, depth=1, save_dir=""):
+    def __init__(self, genes, locations, width, height, depth=1, save_dir="", overwrite=False):
         if depth < 1 or width < 1 or height < 1:
             raise ValueError("Invalid image dimension")
         self.shape = (width, height, depth)
@@ -109,7 +110,7 @@ class SSAMDataset(object):
         #self.corr_map = None
         self.tsne = None
         self.umap = None
-        self.normalized_vf = None
+        self.vf_normalized = None
         self.excluded_clusters = None
         self.celltype_binned_counts = None
         if len(save_dir) == 0:
@@ -117,7 +118,7 @@ class SSAMDataset(object):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         self.save_dir = save_dir
-    
+
     @property
     def vf(self):
         """
@@ -139,7 +140,7 @@ class SSAMDataset(object):
         if self.vf is None:
             return None
         if self._vf_norm is None:
-            self._vf_norm = sum(self.vf).persist()
+            self._vf_norm = self.vf.sum(axis=3).persist()
         return self._vf_norm
     
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
@@ -645,18 +646,20 @@ class SSAMAnalysis(object):
         if kernel != 'gaussian':
             raise NotImplementedError('Only Gaussian kernel is supported for now.')
 
-        pdf_filenames = [os.path.join(self.dataset.save_dir, 'pdf_sd%s_bw%s_%s.zarr'%(
+        vf_shape = tuple(list(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int)) + [len(self.dataset.genes)])
+        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.'),
-            self.dataset.genes[gidx])
-        ) for gidx in range(len(self.dataset.genes))]
+            ('%f' % bandwidth).rstrip('0').rstrip('.')))
 
-        pdfs = []
-        for gidx in range(len(self.dataset.genes)):
-            if os.path.exists(pdf_filenames[gidx]) and not re_run:
-                self._m("Loading KDE for gene %s..."%self.dataset.genes[gidx])
-                z = zarr.open(pdf_filenames[gidx], mode='r')
-            else:
+        zg = zarr.open_group(fn_vf_zarr, mode='a')
+        if not 'vf' in zg:
+            # This is a newly created file
+            zg.array(name='genes', data=self.dataset.genes) # for storage purpose - not used in this method
+            zg.zeros(name='kde_computed', dtype='bool') # flags, kde has computed or not
+            zg.zeros(name='vf', shape=vf_shape, dtype='f4')
+
+        if not all(zg['kde_computed']) or re_run:
+            for gidx in range(len(self.dataset.genes)):
                 self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
                 kde_shape = tuple(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int))
                 coords, data = calc_kde(bandwidth/sampling_distance,
@@ -669,11 +672,12 @@ class SSAMAnalysis(object):
                                         self.ncores)
                 self._m("Saving KDE for gene %s..."%self.dataset.genes[gidx])
                 blosc.set_nthreads(self.ncores)
-                store = zarr.DirectoryStore(pdf_filenames[gidx])
-                z = zarr.zeros(shape=kde_shape, store=store, dtype='float32', overwrite=True)
-                z.set_coordinate_selection(tuple(coords), data)
-            pdfs.append(da.from_zarr(z))
-        self.dataset.vf = pdfs
+                gidx_coords = [gidx] * len(coords[0])
+                zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
+
+        self.dataset.vf_zarr = zg['vf']
+        self.dataset.vf = da.from_zarr(zg['vf'])
+        self.dataset.zarr_group = zg
         return
 
     def calc_correlation_map(self, corr_size=3):
@@ -709,7 +713,7 @@ class SSAMAnalysis(object):
         if min_expression > 0:
             exp_mask = da.zeros_like(max_mask)
             for i in range(len(self.dataset.genes)):
-                exp_mask |= self.dataset.vf[i] > min_expression
+                exp_mask |= self.dataset.vf[..., i] > min_expression
             max_mask &= exp_mask
         if mask is not None:
             max_mask &= mask
@@ -718,12 +722,13 @@ class SSAMAnalysis(object):
         self.dataset.local_maxs = local_maxs
         return
     
-    def downsample_localmax(self, max_count, ):
+    def downsample_localmax(self, max_count, seed=0):
+        np.random.seed(seed)
         ds_indices = np.random.choice(len(self.dataset.local_maxs[0]), max_count)
         self.dataset.local_maxs = tuple([self.dataset.local_maxs[i][ds_indices] for i in range(3)])
         return
 
-    def normalize_vectors_sctransform(self, normalize_vf=True, vst_kwargs={}):
+    def normalize_vectors_sctransform(self, normalize_vf=True, vst_kwargs={}, max_chunk_size=1024**3/2, re_run=False):
         """
         Normalize and regularize vectors using SCtransform
 
@@ -736,28 +741,55 @@ class SSAMAnalysis(object):
         :param vst_kwargs: Optional keywords arguments for sctransform's vst function.
         :type vst_kwargs: dict
         """
+
+        if 'vf_normalized' in self.dataset.zarr_group:
+            if re_run:
+                del self.dataset.zarr_group['vf_normalized']
+                del self.dataset.zarr_group['normalized_vectors']
+            else:
+                self.dataset.vf_normalized = self.dataset.zarr_group['vf_normalized']
+                self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
+                self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
+                return
+
         self._m("Selecting vectors...")
-        localmax_mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
-        localmax_mask[self.dataset.local_maxs] = True
-        comps = [self.dataset.vf[i].reshape(-1)[np.ravel(localmax_mask)] for i in range(len(self.dataset.vf))]
-        vecs = np.stack(comps, axis=1).compute()
+        vecs = np.stack([self.dataset.vf_zarr.get_coordinate_selection(
+            tuple(list(self.dataset.local_maxs) + [[gidx] * len(self.dataset.local_maxs[0])])
+        ) for gidx in range(len(self.dataset.genes))]).T
 
         self._m("Running scTransform...")
-        norm_vec, fit_params = run_sctransform(vec, **vst_kwargs)
-        self.dataset.normalized_vectors = np.array(norm_vec)
-        
+        norm_vec, fit_params = run_sctransform(vecs, **vst_kwargs)
+        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
+
+        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=self.dataset.vf.shape, dtype='f4')
         if normalize_vf:
             self._m("Normalizing vector field...")
-            vf_nonzero_mask = self.dataset.vf_norm > 0
-            nvec = np.sum(np.ravel(vf_nonzero_mask)).compute()
+            nzindices = [i.compute() for i in np.nonzero(self.dataset.vf_norm)]
+            nvec_total = len(nzindices[0])
+            chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
+            total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
+            chunkcnt = 1
             fit_params = np.array(fit_params).T
-            regressor_data = np.ones([nvec, 2])
-            regressor_data[:, 1] = np.log10(np.sum(vf_nonzero, axis=1))
-            mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
-            with np.errstate(divide='ignore', invalid='ignore'):
-                res = (vf_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
-            self.dataset.normalized_vf = np.zeros_like(self.dataset.vf)
-            self.dataset.normalized_vf[self.dataset.vf_norm > 0] = np.nan_to_num(res)
+            for i in range(0, nvec_total, chunk_size):
+                self._m("Processing chunk %d (of %d)..."%(chunkcnt, total_chunkcnt))
+                chunk_coords = tuple([idx[i:i+chunk_size] for idx in nzindices])
+                nvec = len(chunk_coords[0])
+                vecs = np.stack([self.dataset.vf_zarr.get_coordinate_selection(
+                    tuple(list(chunk_coords) + [[gidx] * nvec])
+                ) for gidx in range(len(self.dataset.genes))]).T
+                regressor_data = np.ones([nvec, 2])
+                regressor_data[:, 1] = np.log10(np.sum(vecs, axis=1))
+                mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    res = (vecs - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
+                res = np.nan_to_num(res)
+                for gidx in range(len(self.dataset.genes)):
+                    vf_normalized.set_coordinate_selection(
+                        tuple(list(chunk_coords) + [[gidx] * nvec]),
+                        res[:, gidx]
+                    )
+                chunkcnt += 1
+            self.dataset.vf_normalized = vf_normalized
         return
     
     def normalize_vectors(self, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
@@ -1016,7 +1048,7 @@ class SSAMAnalysis(object):
         
         return
     
-    def map_celltypes(self, centroids=None):
+    def map_celltypes(self, centroids=None, chunk_size=1024**3):
         """
         Create correlation maps between the centroids and the vector field.
         Each correlation map corresponds each cell type map.
@@ -1024,22 +1056,33 @@ class SSAMAnalysis(object):
         :param centroids: If given, map celltypes with the given cluster centroids.
         :type centroids: list(np.array(int))
         """
-        
-        if self.dataset.normalized_vf is None:
-            normalized_vf = self.dataset.vf
+
+        if self.dataset.vf_normalized is None:
+            vf_normalized = self.dataset.vf_zarr
         else:
-            normalized_vf = self.dataset.normalized_vf
+            vf_normalized = self.dataset.vf_normalized
 
         if centroids is None:
             centroids = self.dataset.centroids
         else:
             self.dataset.centroids = centroids
-            
-        max_corr = np.zeros_like(self.dataset.vf_norm) - 1 # range from -1 to +1
-        max_corr_idx = np.zeros_like(self.dataset.vf_norm, dtype=int) - 1 # -1 for background
+
+        max_corr = np.zeros(self.dataset.vf_norm.shape) - 1 # range from -1 to +1
+        max_corr_idx = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1 # -1 for background
+        vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
+        total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
         for cidx, centroid in enumerate(centroids):
-            ctmap = calc_ctmap(centroid, normalized_vf, self.ncores)
-            ctmap = np.nan_to_num(ctmap)
+            print("Generating cell-type map for centroid #%d..."%cidx)
+            ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
+            chunk_cnt = 0
+            for chunk_x in range(0, self.dataset.vf_norm.shape[0], vf_chunkxysize):
+                for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
+                    chunk_cnt += 1
+                    print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
+                    vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :]
+                    ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
+                    ctmap_chunk = np.nan_to_num(ctmap_chunk)
+                    ctmap[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :] = ctmap_chunk
             mask = max_corr < ctmap
             max_corr[mask] = ctmap[mask]
             max_corr_idx[mask] = cidx
