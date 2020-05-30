@@ -655,11 +655,15 @@ class SSAMAnalysis(object):
         if not 'vf' in zg:
             # This is a newly created file
             zg.array(name='genes', data=self.dataset.genes) # for storage purpose - not used in this method
-            zg.zeros(name='kde_computed', dtype='bool') # flags, kde has computed or not
+            zg.zeros(name='kde_computed', shape=len(self.dataset.genes), dtype='bool') # flags, kde has computed or not
             zg.zeros(name='vf', shape=vf_shape, dtype='f4')
 
         if not all(zg['kde_computed']) or re_run:
+            if not re_run:
+                self._m("Resuming KDE computation...")
             for gidx in range(len(self.dataset.genes)):
+                if zg['kde_computed'][gidx]:
+                    continue
                 self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
                 kde_shape = tuple(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int))
                 coords, data = calc_kde(bandwidth/sampling_distance,
@@ -674,6 +678,7 @@ class SSAMAnalysis(object):
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
                 zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
+                zg['kde_computed'][gidx] = True
 
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
