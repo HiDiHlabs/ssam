@@ -1091,11 +1091,14 @@ class SSAMAnalysis(object):
             mask = max_corr < ctmap
             max_corr[mask] = ctmap[mask]
             max_corr_idx[mask] = cidx
+
+        max_corr[self.dataset.vf_norm == 0] = -1
+        max_corr_idx[self.dataset.vf_norm == 0] = -1
         self.dataset.max_correlations = max_corr
         self.dataset.celltype_maps = max_corr_idx
         return
 
-    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=0, filter_params={}, output_mask=None):
+    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, min_blob_area=0, filter_params={}, output_mask=None):
         """
         Post-filter cell type maps created by `map_celltypes`.
 
@@ -1105,8 +1108,6 @@ class SSAMAnalysis(object):
             If a string is given instead, then the threshold is automatically determined using
             sklearn's `threshold filter functions <https://scikit-image.org/docs/dev/api/skimage.filters.html>`_ (The functions start with `threshold_`).
         :type min_norm: str or float
-        :param fill_blobs: If true, then the algorithm automatically fill holes in each blob.
-        :type fill_blobs: bool
         :param min_blob_area: The blobs with its area less than this value will be removed.
         :type min_blob_area: int
         :param filter_params: Filter parameters used for the sklearn's threshold filter functions.
@@ -1121,7 +1122,7 @@ class SSAMAnalysis(object):
             # some functions doesn't support param 'offset', therefore temporariliy remove it from here
             filter_offset = filter_params.pop('offset', 0)
         
-        filtered_ctmaps = np.zeros_like(self.dataset.celltype_maps) - 1
+        filtered_ctmaps = np.array(self.dataset.celltype_maps)
         mask = np.zeros_like(self.dataset.vf_norm, dtype=bool)
         for cidx in range(len(self.dataset.centroids)):
             ctcorr = self.dataset.get_celltype_correlation(cidx)
@@ -1150,22 +1151,7 @@ class SSAMAnalysis(object):
                     mask[..., z][np.logical_and(self.dataset.vf_norm[..., z] > min_norm_cut, ctcorr[..., z] > min_r)] = 1
             else:
                 mask[np.logical_and(self.dataset.vf_norm > min_norm, ctcorr > min_r)] = 1
-
-            if min_blob_area > 0 or fill_blobs:
-                blob_labels = measure.label(mask, background=0)
-                for bp in measure.regionprops(blob_labels):
-                    if min_blob_area > 0 and bp.filled_area < min_blob_area:
-                        for c in bp.coords:
-                            mask[c[0], c[1], c[2]] = 0 # fill with zeros
-                            #mask[c[0], c[1]] = 0 # fill with zeros
-                        continue
-                    if fill_blobs and bp.area != bp.filled_area:
-                        minx, miny, minz, maxx, maxy, maxz = bp.bbox
-                        mask[minx:maxx, miny:maxy, minz:maxz] |= bp.filled_image
-                        #minr, minc, maxr, maxc = bp.bbox
-                        #mask[minr:maxr, minc:maxc] |= bp.filled_image
-                
-            filtered_ctmaps[np.logical_and(mask == 1, np.logical_or(self.dataset.celltype_maps == -1, self.dataset.celltype_maps == cidx))] = cidx
+        filtered_ctmaps[mask == False] = -1
         
         if isinstance(min_norm, str):
             # restore offset param
