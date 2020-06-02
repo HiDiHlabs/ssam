@@ -647,7 +647,7 @@ class SSAMAnalysis(object):
         if depth < 1 or width < 1 or height < 1:
             raise ValueError("Invalid image dimension")
 
-        vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(self.dataset.genes)])
+        vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(genes)])
         fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
@@ -655,34 +655,41 @@ class SSAMAnalysis(object):
         zg = zarr.open_group(fn_vf_zarr, mode='a')
         if not 'vf' in zg:
             # This is a newly created file
-            zg.array(name='genes', data=self.dataset.genes) # for storage purpose - not used in this method
-            zg.zeros(name='kde_computed', shape=len(self.dataset.genes), dtype='bool') # flags, kde has computed or not
+            zg.array(name='genes', data=genes) # for storage purpose - not used in this method
+            zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
             zg.zeros(name='vf', shape=vf_shape, dtype='f4')
 
         if not all(zg['kde_computed']) or re_run:
             if not re_run:
                 self._m("Resuming KDE computation...")
-            for gidx in range(len(self.dataset.genes)):
+            for gidx in range(len(genes)):
                 if zg['kde_computed'][gidx]:
                     continue
-                self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
+                self._m("Running KDE for gene %s..."%genes[gidx])
                 kde_shape = tuple(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int))
+                if locations[gidx].shape[-1] == 2:
+                    loc_z = np.zeros(len(locations[gidx][:, 0]))
+                else:
+                    loc_z = locations[gidx][:, 2]/sampling_distance
                 coords, data = calc_kde(bandwidth/sampling_distance,
                                         locations[gidx][:, 0]/sampling_distance,
                                         locations[gidx][:, 1]/sampling_distance,
-                                        locations[gidx][:, 2]/sampling_distance,
+                                        loc_z,
                                         kde_shape,
                                         prune_coefficient,
                                         0,
                                         self.ncores)
-                self._m("Saving KDE for gene %s..."%self.dataset.genes[gidx])
+                self._m("Saving KDE for gene %s..."%genes[gidx])
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
-                zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
+                if len(coords) == 0:
+                    self._m("Computed density is zero everywhere. Maybe something is wrong?")
+                else:
+                    zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
                 zg['kde_computed'][gidx] = True
 
-        self.ndim = 2 if depth == 1 else 3
-        self.genes = list(genes)
+        self.dataset.ndim = 2 if depth == 1 else 3
+        self.dataset.genes = list(genes)
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
