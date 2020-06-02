@@ -88,20 +88,7 @@ class SSAMDataset(object):
     :type save_dir: str
     """
         
-    def __init__(self, genes, locations, width, height, depth=1, save_dir="", overwrite=False):
-        if depth < 1 or width < 1 or height < 1:
-            raise ValueError("Invalid image dimension")
-        self.shape = (width, height, depth)
-        self.ndim = 2 if depth == 1 else 3
-        self.genes = list(genes)
-        self.locations = []
-        for l in list(locations):
-            if l.shape[-1] == 3:
-                self.locations.append(l)
-            elif l.shape[-1] == 2:
-                self.locations.append(np.concatenate((l, np.zeros([l.shape[0], 1])), axis=1))
-            else:
-                raise ValueError("Invalid mRNA locations")
+    def __init__(self, save_dir="", overwrite=False):
         self._vf = None
         self._vf_norm = None
         self.normalized_vectors = None
@@ -627,8 +614,20 @@ class SSAMAnalysis(object):
     def _m(self, message):
         if self.verbose:
             print(message, flush=True)
-
-    def run_kde(self, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, re_run=False, use_mmap=False):
+            
+    def load_kde(self, bandwidth=2.5, sampling_distance=1.0):
+        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
+            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+            ('%f' % bandwidth).rstrip('0').rstrip('.')))
+        zg = zarr.open_group(fn_vf_zarr, mode='o')
+        self.genes = list(zg['genes'][:])
+        self.dataset.vf_zarr = zg['vf']
+        self.dataset.vf = da.from_zarr(zg['vf'])
+        self.dataset.zarr_group = zg
+        self.dataset.shape = self.dataset.vf_norm.shape
+        self.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
+        
+    def run_kde(self, genes, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, use_mmap=False, re_run=False):
         """
         Run KDE. This method uses precomputed kernels to estimate density of mRNA by default. Set `prune_coefficient` negative to disable this behavior.
         :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
@@ -645,8 +644,10 @@ class SSAMAnalysis(object):
         """
         if kernel != 'gaussian':
             raise NotImplementedError('Only Gaussian kernel is supported for now.')
+        if depth < 1 or width < 1 or height < 1:
+            raise ValueError("Invalid image dimension")
 
-        vf_shape = tuple(list(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int)) + [len(self.dataset.genes)])
+        vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(self.dataset.genes)])
         fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
@@ -665,11 +666,11 @@ class SSAMAnalysis(object):
                 if zg['kde_computed'][gidx]:
                     continue
                 self._m("Running KDE for gene %s..."%self.dataset.genes[gidx])
-                kde_shape = tuple(np.ceil(np.array(self.dataset.shape)/sampling_distance).astype(int))
+                kde_shape = tuple(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int))
                 coords, data = calc_kde(bandwidth/sampling_distance,
-                                        self.dataset.locations[gidx][:, 0]/sampling_distance,
-                                        self.dataset.locations[gidx][:, 1]/sampling_distance,
-                                        self.dataset.locations[gidx][:, 2]/sampling_distance,
+                                        locations[gidx][:, 0]/sampling_distance,
+                                        locations[gidx][:, 1]/sampling_distance,
+                                        locations[gidx][:, 2]/sampling_distance,
                                         kde_shape,
                                         prune_coefficient,
                                         0,
@@ -680,9 +681,12 @@ class SSAMAnalysis(object):
                 zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
                 zg['kde_computed'][gidx] = True
 
+        self.ndim = 2 if depth == 1 else 3
+        self.genes = list(genes)
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
+        self.dataset.shape = self.dataset.vf_norm.shape
         return
 
     def calc_correlation_map(self, corr_size=3):
