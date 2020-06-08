@@ -1064,7 +1064,7 @@ class SSAMAnalysis(object):
         
         return
     
-    def map_celltypes(self, centroids=None, chunk_size=1024**3):
+    def map_celltypes(self, centroids=None, exclude_gene_indices=None, chunk_size=1024**3):
         """
         Create correlation maps between the centroids and the vector field.
         Each correlation map corresponds each cell type map.
@@ -1080,14 +1080,12 @@ class SSAMAnalysis(object):
 
         if centroids is None:
             centroids = self.dataset.centroids
-        else:
-            self.dataset.centroids = centroids
-
+                
         max_corr = np.zeros(self.dataset.vf_norm.shape) - 1 # range from -1 to +1
         max_corr_idx = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1 # -1 for background
         vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
         total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
-        for cidx, centroid in enumerate(centroids):
+        for cidx, centroid in enumerate(_centroids):
             print("Generating cell-type map for centroid #%d..."%cidx)
             ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
             chunk_cnt = 0
@@ -1096,6 +1094,8 @@ class SSAMAnalysis(object):
                     chunk_cnt += 1
                     print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
                     vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :]
+                    if exclude_gene_indices is not None:
+                        vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=3) # np.delete creates a copy, not modifying the original
                     ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
                     ctmap_chunk = np.nan_to_num(ctmap_chunk)
                     ctmap[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :] = ctmap_chunk
