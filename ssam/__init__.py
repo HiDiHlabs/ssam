@@ -1,5 +1,7 @@
 import zarr
 from numcodecs import blosc
+from multiprocessing import ThreadPool
+import dask
 import dask.array as da
 import numpy as np
 import pandas as pd
@@ -10,31 +12,23 @@ import multiprocessing
 import os
 sns.set()
 sns.set_style("whitegrid", {'axes.grid' : False})
-from functools import reduce
-from sklearn.neighbors.kde import KernelDensity
 from sklearn import preprocessing
 import scipy
 from scipy import ndimage
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from umap import UMAP
-from multiprocessing import Pool
-from contextlib import closing
 from tempfile import mkdtemp, TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
-from sklearn.cluster import KMeans
 import community
 import networkx as nx
-import sparse
 from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
 from matplotlib.colors import ListedColormap
-import pickle
 import subprocess
 from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
-from PIL import Image
 from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
@@ -57,7 +51,6 @@ def run_sctransform(data, **kwargs):
     else:
         vst_opt_str = ', ' + ', '.join(vst_options)
     with TemporaryDirectory() as tmpdirname:
-        tmpdirname = "/home/pjb7687/test"
         ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
         df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
         df.to_feather(ifn)
@@ -600,7 +593,7 @@ class SSAMAnalysis(object):
     :param verbose: If True, then it prints out messages during the analysis.
     :type verbose: bool
     """
-    def __init__(self, dataset, ncores=-1, verbose=False):
+    def __init__(self, dataset, ncores=1, verbose=False):
         self.dataset = dataset
         if not ncores > 0:
             ncores += multiprocessing.cpu_count()
@@ -608,6 +601,12 @@ class SSAMAnalysis(object):
             ncores = multiprocessing.cpu_count()
         if not ncores > 0:
             raise ValueError("Invalid number of cores.")
+        os.environ["OMP_NUM_THREADS"] = str(ncores)
+        os.environ["OPENBLAS_NUM_THREADS"] = str(ncores)
+        os.environ["MKL_NUM_THREADS"] = str(ncores)
+        os.environ["VECLIB_MAXIMUM_THREADS"] = str(ncores)
+        os.environ["NUMEXPR_NUM_THREADS"] = str(ncores)
+        dask.config.set(pool=ThreadPool(ncores))
         self.ncores = ncores
         self.verbose = verbose
 
