@@ -620,12 +620,12 @@ class SSAMAnalysis(object):
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
         zg = zarr.open_group(fn_vf_zarr, mode='o')
-        self.genes = list(zg['genes'][:])
+        self.dataset.genes = list(zg['genes'][:])
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
         self.dataset.shape = self.dataset.vf_norm.shape
-        self.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
+        self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
         
     def run_kde(self, genes, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, use_mmap=False, re_run=False):
         """
