@@ -1,6 +1,6 @@
 import zarr
 from numcodecs import blosc
-from multiprocessing import ThreadPool
+from multiprocessing.pool import ThreadPool
 import dask
 import dask.array as da
 import numpy as np
