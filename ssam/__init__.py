@@ -84,6 +84,8 @@ class SSAMDataset(object):
     def __init__(self, save_dir="", overwrite=False):
         self._vf = None
         self._vf_norm = None
+        self._local_maxs = None
+        self._selected_vectors = None
         self.normalized_vectors = None
         self.expanded_vectors = None
         self.cluster_labels = None
@@ -98,6 +100,24 @@ class SSAMDataset(object):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         self.save_dir = save_dir
+    
+    @property
+    def local_maxs(self):
+        return self._local_maxs
+    
+    @local_maxs.setter
+    def local_maxs(self, local_maxs):
+        self._local_maxs = local_maxs
+        self._selected_vectors = None
+    
+    @property
+    def selected_vectors(self):
+        if self._selected_vectors is None:
+            assert self.local_maxs is not None
+            self._selected_vectors = np.stack([self.vf_zarr.get_coordinate_selection(
+                tuple(list(self.local_maxs) + [[gidx] * len(self.local_maxs[0])])
+            ) for gidx in range(len(self.genes))]).T
+        return self._selected_vectors
 
     @property
     def vf(self):
@@ -767,13 +787,8 @@ class SSAMAnalysis(object):
                 self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
                 return
 
-        self._m("Selecting vectors...")
-        vecs = np.stack([self.dataset.vf_zarr.get_coordinate_selection(
-            tuple(list(self.dataset.local_maxs) + [[gidx] * len(self.dataset.local_maxs[0])])
-        ) for gidx in range(len(self.dataset.genes))]).T
-
         self._m("Running scTransform...")
-        norm_vec, fit_params = run_sctransform(vecs, **vst_kwargs)
+        norm_vec, fit_params = run_sctransform(self.dataset.selected_vectors, **vst_kwargs)
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
 
         vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=self.dataset.vf.shape, dtype='f4')
@@ -820,10 +835,7 @@ class SSAMAnalysis(object):
         :param scale: If True, vectors are z-scaled (mean centered and scaled by stdev).
         :type scale: bool
         """
-        localmax_mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
-        localmax_mask[self.dataset.local_maxs] = True
-        comps = [self.dataset.vf[i].reshape(-1)[np.ravel(localmax_mask)] for i in range(len(self.dataset.vf))]
-        vec = np.stack(comps, axis=1).compute()
+        vec = self.dataset.selected_vectors
         if normalize_gene:
             vec = preprocessing.normalize(vec, norm=norm, axis=0) * size_after_normalization  # Normalize per gene
         if normalize_vector:
@@ -1084,7 +1096,7 @@ class SSAMAnalysis(object):
         max_corr_idx = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1 # -1 for background
         vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
         total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
-        for cidx, centroid in enumerate(_centroids):
+        for cidx, centroid in enumerate(centroids):
             print("Generating cell-type map for centroid #%d..."%cidx)
             ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
             chunk_cnt = 0
