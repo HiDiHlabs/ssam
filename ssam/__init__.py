@@ -1,6 +1,7 @@
 import zarr
 from numcodecs import blosc
 from multiprocessing.pool import ThreadPool
+import pickle
 import dask
 import dask.array as da
 import numpy as np
@@ -106,18 +107,22 @@ class SSAMDataset(object):
         return self._local_maxs
     
     @local_maxs.setter
-    def local_maxs(self, local_maxs):
-        self._local_maxs = local_maxs
+    def local_maxs(self, v):
+        self._local_maxs = v
         self._selected_vectors = None
     
     @property
     def selected_vectors(self):
         if self._selected_vectors is None:
-            assert self.local_maxs is not None
+            assert self._local_maxs is not None
             self._selected_vectors = np.stack([self.vf_zarr.get_coordinate_selection(
                 tuple(list(self.local_maxs) + [[gidx] * len(self.local_maxs[0])])
             ) for gidx in range(len(self.genes))]).T
         return self._selected_vectors
+    
+    @selected_vectors.setter
+    def selected_vectors(self, v):
+        self._selected_vectors = v
 
     @property
     def vf(self):
@@ -646,6 +651,25 @@ class SSAMAnalysis(object):
         self.dataset.shape = self.dataset.vf_norm.shape
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
         
+    def migrate_kde(self, genes, bandwidth=2.5, sampling_distance=1.0):
+        fn_vf_prefix = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s'%(
+            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
+            ('%f' % bandwidth).rstrip('0').rstrip('.')))
+        fn_vf_zarr = fn_vf_prefix + ".zarr"
+        fn_vf_old = fn_vf_prefix + ".pkl"
+        zg = zarr.open_group(fn_vf_zarr, mode='w')
+        zg['genes'] = genes
+        zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
+        with open(fn_vf_old, "rb") as f:
+            vf_nparr = pickle.load(f)
+            zg['vf'] = vf_nparr
+        self.dataset.genes = genes
+        self.dataset.vf_zarr = zg['vf']
+        self.dataset.vf = da.from_zarr(zg['vf'])
+        self.dataset.zarr_group = zg
+        self.dataset.shape = self.dataset.vf_norm.shape
+        self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
+        
     def run_kde(self, genes, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, use_mmap=False, re_run=False):
         """
         Run KDE. This method uses precomputed kernels to estimate density of mRNA by default. Set `prune_coefficient` negative to disable this behavior.
@@ -679,7 +703,7 @@ class SSAMAnalysis(object):
             zg.zeros(name='vf', shape=vf_shape, dtype='f4')
 
         if not all(zg['kde_computed']) or re_run:
-            if not re_run:
+            if not re_run and any(zg['kde_computed']):
                 self._m("Resuming KDE computation...")
             for gidx in range(len(genes)):
                 if zg['kde_computed'][gidx]:
@@ -1075,6 +1099,21 @@ class SSAMAnalysis(object):
         
         return
     
+    def _map_celltype(self, centroid, exclude_gene_indices=None, chunk_size=1024**3):
+        ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
+        chunk_cnt = 0
+        for chunk_x in range(0, self.dataset.vf_norm.shape[0], vf_chunkxysize):
+            for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
+                chunk_cnt += 1
+                print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
+                vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :]
+                if exclude_gene_indices is not None:
+                    vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=3) # np.delete creates a copy, not modifying the original
+                ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
+                ctmap_chunk = np.nan_to_num(ctmap_chunk)
+                ctmap[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :] = ctmap_chunk
+        return ctmap
+        
     def map_celltypes(self, centroids=None, exclude_gene_indices=None, chunk_size=1024**3):
         """
         Create correlation maps between the centroids and the vector field.
@@ -1098,18 +1137,7 @@ class SSAMAnalysis(object):
         total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
         for cidx, centroid in enumerate(centroids):
             print("Generating cell-type map for centroid #%d..."%cidx)
-            ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
-            chunk_cnt = 0
-            for chunk_x in range(0, self.dataset.vf_norm.shape[0], vf_chunkxysize):
-                for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
-                    chunk_cnt += 1
-                    print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
-                    vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :]
-                    if exclude_gene_indices is not None:
-                        vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=3) # np.delete creates a copy, not modifying the original
-                    ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
-                    ctmap_chunk = np.nan_to_num(ctmap_chunk)
-                    ctmap[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :] = ctmap_chunk
+            ctmap = self._map_celltype(centroid, exclude_gene_indices=None, chunk_size=1024**3)
             mask = max_corr < ctmap
             max_corr[mask] = ctmap[mask]
             max_corr_idx[mask] = cidx
@@ -1145,14 +1173,19 @@ class SSAMAnalysis(object):
             filter_offset = filter_params.pop('offset', 0)
         
         filtered_ctmaps = np.array(self.dataset.celltype_maps)
-        mask = np.zeros_like(self.dataset.vf_norm, dtype=bool)
-        for cidx in range(len(self.dataset.centroids)):
+        mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
+        
+        for cidx in np.unique(self.dataset.celltype_maps):
+            if cidx == -1:
+                continue
             ctcorr = self.dataset.get_celltype_correlation(cidx)
             if isinstance(min_norm, str):
                 for z in range(self.dataset.shape[2]):
+                    vf_norm_z = self.dataset.vf_norm[..., z].compute()
+                    ctcorr_mask_z = ctcorr[..., z] > min_r
                     if min_norm in ["local", "niblack", "sauvola", "localotsu"]:
-                        im = np.zeros(self.dataset.vf_norm.shape[:-1])
-                        im[ctcorr[..., z] > min_r] = self.dataset.vf_norm[..., z][ctcorr[..., z] > min_r]
+                        im = np.zeros(vf_norm_z.shape)
+                        im[ctcorr_mask_z] = vf_norm_z[ctcorr_mask_z]
                     if min_norm == "localotsu":
                         max_norm = np.max(im)
                         im /= max_norm
@@ -1163,14 +1196,14 @@ class SSAMAnalysis(object):
                         if min_norm in ["local", "niblack", "sauvola"]:
                             min_norm_cut = filter_func(im, **filter_params)
                         else:
-                            highr_norm = self.dataset.vf_norm[..., z][ctcorr[..., z] > min_r]
+                            highr_norm = vf_norm_z[ctcorr_mask_z]
                             #sigma = np.std(highr_norm)
                             if len(highr_norm) == 0 or np.max(highr_norm) == np.min(highr_norm):
                                 min_norm_cut = np.max(self.dataset.vf_norm)
                             else:
                                 min_norm_cut = filter_func(highr_norm, **filter_params)
                     min_norm_cut += filter_offset # manually apply filter offset
-                    mask[..., z][np.logical_and(self.dataset.vf_norm[..., z] > min_norm_cut, ctcorr[..., z] > min_r)] = 1
+                    mask[..., z][np.logical_and(vf_norm_z > min_norm_cut, ctcorr_mask_z)] = 1
             else:
                 mask[np.logical_and(self.dataset.vf_norm > min_norm, ctcorr > min_r)] = 1
         filtered_ctmaps[mask == False] = -1
