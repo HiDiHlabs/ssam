@@ -986,7 +986,7 @@ class SSAMAnalysis(object):
         vecs_normalized = self.dataset.normalized_vectors
         vecs_normalized_dimreduced = PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
 
-        def cluster_vecs(vecs):
+        def cluster_louvain(vecs):
             k = min(snn_neighbors, vecs.shape[0])
             knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
             intersections = np.dot(knn_graph, knn_graph.T)
@@ -1010,7 +1010,7 @@ class SSAMAnalysis(object):
             return lbls
         
         if subclustering:
-            super_lbls = cluster_vecs(vecs_normalized_dimreduced)
+            super_lbls = cluster_louvain(vecs_normalized_dimreduced)
             dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)
             all_lbls = np.zeros_like(super_lbls)
             global_lbl_idx = 0
@@ -1019,7 +1019,7 @@ class SSAMAnalysis(object):
                 if super_lbl == -1:
                     all_lbls[super_lbl_idx] = -1
                     continue
-                sub_lbls = cluster_vecs(dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_)
+                sub_lbls = dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_
                 for sub_lbl in set(list(sub_lbls)):
                     if sub_lbl == -1:
                         all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
@@ -1027,7 +1027,7 @@ class SSAMAnalysis(object):
                     all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
                     global_lbl_idx += 1
         else:
-            all_lbls = cluster_vecs(vecs_normalized_dimreduced)            
+            all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
                 
         new_labels = self._correct_cluster_labels(all_lbls, centroid_correction_threshold)
         centroids, centroids_stdev = self._calc_centroid(new_labels)
