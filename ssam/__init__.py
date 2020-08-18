@@ -69,7 +69,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             df = data
         else:
             df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
-        if version.parse(pyarrow._version_) >= version.parse("1.0.0"):
+        if version.parse(pyarrow.__version__) >= version.parse("1.0.0"):
             df.to_feather(ifn, version=1)
         else:
             df.to_feather(ifn)
@@ -118,7 +118,7 @@ class SSAMDataset(object):
     :type save_dir: str
     """
         
-    def _init_(self, save_dir="", overwrite=False):
+    def __init__(self, save_dir="", overwrite=False):
         self._vf = None
         self._vf_norm = None
         self._local_maxs = None
@@ -558,7 +558,7 @@ class SSAMDataset(object):
                 sig_colors_defined = True
             for corr_label, corr_func in correlation_methods:
                 corr_results = [corr_func(p, sig_value) for sig_value in sig_values]
-                corr_results = [e[0] if hasattr(e, "_getitem_") else e for e in corr_results]
+                corr_results = [e[0] if hasattr(e, "__getitem__") else e for e in corr_results]
                 max_corr_idx = np.argmax(corr_results)
                 ax = plt.subplot(total_signatures, 4, 7+subplot_idx*4)
                 lbl = sig_labels[max_corr_idx]
@@ -654,7 +654,7 @@ class SSAMAnalysis(object):
     :param verbose: If True, then it prints out messages during the analysis.
     :type verbose: bool
     """
-    def _init_(self, dataset, ncores=1, verbose=False):
+    def __init__(self, dataset, ncores=1, verbose=False):
         self.dataset = dataset
         if not ncores > 0:
             ncores += multiprocessing.cpu_count()
