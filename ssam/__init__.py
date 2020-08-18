@@ -82,7 +82,10 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             if not c:
                 break
             if verbose:
-                sys.stdout.write(c.decode("utf-8"))
+                try:
+                    sys.stdout.write(c.decode("utf-8"))
+                except:
+                    pass
         _log("Reading output files...")
         o, p = pd.read_feather(ofn), pd.read_feather(pfn)
         _log("Clipping residuals...")
