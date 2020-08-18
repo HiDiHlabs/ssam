@@ -23,6 +23,7 @@ from tempfile import mkdtemp, TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
 import community
 import networkx as nx
+from sklearn.cluster import DBSCAN
 from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
@@ -68,7 +69,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             df = data
         else:
             df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
-        if version.parse(pyarrow.__version__) >= version.parse("1.0.0"):
+        if version.parse(pyarrow._version_) >= version.parse("1.0.0"):
             df.to_feather(ifn, version=1)
         else:
             df.to_feather(ifn)
@@ -117,7 +118,7 @@ class SSAMDataset(object):
     :type save_dir: str
     """
         
-    def __init__(self, save_dir="", overwrite=False):
+    def _init_(self, save_dir="", overwrite=False):
         self._vf = None
         self._vf_norm = None
         self._local_maxs = None
@@ -240,7 +241,7 @@ class SSAMDataset(object):
         elif rotate == 3:
             plt.gca().invert_yaxis()    
         
-    def __run_pca(self, exclude_bad_clusters, pca_dims, random_state):
+    def _run_pca(self, exclude_bad_clusters, pca_dims, random_state):
         if exclude_bad_clusters:
             good_vecs = self.normalized_vectors[self.filtered_cluster_labels != -1, :]
         else:
@@ -282,7 +283,7 @@ class SSAMDataset(object):
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_tsne or self.tsne is None:
-            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
+            pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
             self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state, **tsne_kwargs).fit_transform(pcs[:, :pca_dims])
         if self.filtered_cluster_labels is not None:
             cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
@@ -325,7 +326,7 @@ class SSAMDataset(object):
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
         if run_umap or self.umap is None:
-            pcs = self.__run_pca(exclude_bad_clusters, pca_dims, random_state)
+            pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
             self.umap = UMAP(metric=metric, random_state=random_state, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
         if self.filtered_cluster_labels is not None:
             cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
@@ -557,7 +558,7 @@ class SSAMDataset(object):
                 sig_colors_defined = True
             for corr_label, corr_func in correlation_methods:
                 corr_results = [corr_func(p, sig_value) for sig_value in sig_values]
-                corr_results = [e[0] if hasattr(e, "__getitem__") else e for e in corr_results]
+                corr_results = [e[0] if hasattr(e, "_getitem_") else e for e in corr_results]
                 max_corr_idx = np.argmax(corr_results)
                 ax = plt.subplot(total_signatures, 4, 7+subplot_idx*4)
                 lbl = sig_labels[max_corr_idx]
@@ -653,7 +654,7 @@ class SSAMAnalysis(object):
     :param verbose: If True, then it prints out messages during the analysis.
     :type verbose: bool
     """
-    def __init__(self, dataset, ncores=1, verbose=False):
+    def _init_(self, dataset, ncores=1, verbose=False):
         self.dataset = dataset
         if not ncores > 0:
             ncores += multiprocessing.cpu_count()
@@ -915,7 +916,7 @@ class SSAMAnalysis(object):
         self.dataset.normalized_vectors = vec
         return
     
-    def __correct_cluster_labels(self, cluster_labels, centroid_correction_threshold):
+    def _correct_cluster_labels(self, cluster_labels, centroid_correction_threshold):
         new_labels = np.array(cluster_labels, copy=True)
         if centroid_correction_threshold < 1.0:
             for cidx in np.unique(cluster_labels):
@@ -935,7 +936,7 @@ class SSAMAnalysis(object):
                             new_labels[vidx] = -1
         return new_labels
 
-    def __calc_centroid(self, cluster_labels):
+    def _calc_centroid(self, cluster_labels):
         centroids = []
         centroids_stdev = []
         #medoids = []
@@ -952,15 +953,15 @@ class SSAMAnalysis(object):
             centroids_stdev.append(centroid_stdev)
         return centroids, centroids_stdev#, medoids
 
-    def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
-                        metric="correlation", subclustering=False, centroid_correction_threshold=0.8, random_state=0):
+    def cluster_vectors(self, pca_dims=10, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
+                        metric="correlation", subclustering=True, dbscan_eps=0.4, centroid_correction_threshold=0.8, random_state=0):
         """
         Cluster the given vectors using the specified clustering method.
 
         :param pca_dims: Number of principal componants used for clustering.
         :type pca_dims: int
-        :param min_cluster_size: Set minimum cluster size.
-        :type min_cluster_size: int
+        :param min_samples: Set minimum cluster size.
+        :type min_samples: int
         :param resolution: Resolution for Louvain community detection.
         :type resolution: float
         :param prune: Threshold for Jaccard index (weight of SNN network). If it is smaller than prune, it is set to zero.
@@ -971,8 +972,10 @@ class SSAMAnalysis(object):
         :type max_correlation: bool
         :param metric: Metric for calculation of distance between vectors in gene expression space.
         :type metric: str
-        :param subclustering: If True, each cluster will be clustered once again with the same method to find more subclusters.
+        :param subclustering: If True, each cluster will be clustered once again with DBSCAN algorithm to find more subclusters.
         :type subclustering: bool
+        :param dbscan_eps: 'eps' value for DBSCAN subclustering. Not used when 'subclustering' is set False.
+        :type dbscan_eps: float
         :param centroid_correction_threshold: Centroid will be recalculated with the vectors
             which have the correlation to the cluster medoid equal or higher than this value.
         :type centroid_correction_threshold: float
@@ -986,13 +989,7 @@ class SSAMAnalysis(object):
         def cluster_vecs(vecs):
             k = min(snn_neighbors, vecs.shape[0])
             knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
-            #snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
             intersections = np.dot(knn_graph, knn_graph.T)
-            #unions = np.zeros_like(intersections)
-            #for i in range(knn_graph.shape[0]):
-            #    for j in range(knn_graph.shape[1]):
-            #        unions[i, j] = np.sum(np.logical_or(knn_graph[i, :], knn_graph[j, :]))
-            #snn_graph = intersections / unions
             snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
             snn_graph[snn_graph < prune] = 0
             G = nx.from_numpy_matrix(snn_graph)
@@ -1002,7 +999,7 @@ class SSAMAnalysis(object):
             cluster_indices = []
             for lbl in set(list(lbls)):
                 cnt = np.sum(lbls == lbl)
-                if cnt < min_cluster_size:
+                if cnt < min_samples:
                     low_clusters.append(lbl)
                 else:
                     cluster_indices.append(lbls == lbl)
@@ -1014,6 +1011,7 @@ class SSAMAnalysis(object):
         
         if subclustering:
             super_lbls = cluster_vecs(vecs_normalized_dimreduced)
+            dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)
             all_lbls = np.zeros_like(super_lbls)
             global_lbl_idx = 0
             for super_lbl in set(list(super_lbls)):
@@ -1021,7 +1019,7 @@ class SSAMAnalysis(object):
                 if super_lbl == -1:
                     all_lbls[super_lbl_idx] = -1
                     continue
-                sub_lbls = cluster_vecs(vecs_normalized_dimreduced[super_lbl_idx])
+                sub_lbls = cluster_vecs(dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_)
                 for sub_lbl in set(list(sub_lbls)):
                     if sub_lbl == -1:
                         all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
@@ -1031,8 +1029,8 @@ class SSAMAnalysis(object):
         else:
             all_lbls = cluster_vecs(vecs_normalized_dimreduced)            
                 
-        new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
-        centroids, centroids_stdev = self.__calc_centroid(new_labels)
+        new_labels = self._correct_cluster_labels(all_lbls, centroid_correction_threshold)
+        centroids, centroids_stdev = self._calc_centroid(new_labels)
 
         merge_candidates = []
         if max_correlation < 1.0:
@@ -1050,8 +1048,8 @@ class SSAMAnalysis(object):
             for i in sorted(removed_indices, reverse=True):
                 all_lbls[all_lbls > i] -= 1
 
-            new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
-            centroids, centroids_stdev = self.__calc_centroid(new_labels)
+            new_labels = self._correct_cluster_labels(all_lbls, centroid_correction_threshold)
+            centroids, centroids_stdev = self._calc_centroid(new_labels)
                 
         self.dataset.cluster_labels = all_lbls
         self.dataset.filtered_cluster_labels = new_labels
@@ -1125,8 +1123,8 @@ class SSAMAnalysis(object):
             self.dataset.cluster_labels[self.dataset.cluster_labels > centroid] -= 1
         self.dataset.normalized_vectors = self.dataset.normalized_vectors[mask, :]
         
-        new_labels = self.__correct_cluster_labels(self.dataset.cluster_labels, centroid_correction_threshold)
-        centroids, centroids_stdev = self.__calc_centroid(new_labels)
+        new_labels = self._correct_cluster_labels(self.dataset.cluster_labels, centroid_correction_threshold)
+        centroids, centroids_stdev = self._calc_centroid(new_labels)
         
         self.dataset.centroids = centroids
         self.dataset.centroids_stdev = centroids_stdev
