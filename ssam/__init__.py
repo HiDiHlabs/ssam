@@ -71,7 +71,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             df.to_feather(ifn, version=1)
         else:
             df.to_feather(ifn)
-        rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
+        rcmd = 'library(arrow); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
             f.write(rcmd)
