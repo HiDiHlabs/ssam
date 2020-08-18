@@ -34,6 +34,7 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
+import time
 import pyarrow
 from packaging import version
 
@@ -86,6 +87,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
                     sys.stdout.write(c.decode("utf-8"))
                 except:
                     pass
+            time.sleep(0.0001)
         _log("Reading output files...")
         o, p = pd.read_feather(ofn), pd.read_feather(pfn)
         _log("Clipping residuals...")
