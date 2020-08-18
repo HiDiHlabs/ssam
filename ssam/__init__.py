@@ -34,6 +34,9 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
+import pyarrow
+from packaging import version
+
 def run_sctransform(data, clip_range=None, verbose=True, **kwargs):
     """
     Run 'sctransform' R package and returns the normalized matrix and the model parameters.
@@ -62,7 +65,10 @@ def run_sctransform(data, clip_range=None, verbose=True, **kwargs):
             df = data
         else:
             df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
-        df.to_feather(ifn)
+        if version.parse(pyarrow.__version__) >= version.parse("1.0.0"):
+            df.to_feather(ifn, version=1)
+        else:
+            df.to_feather(ifn)
         rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
