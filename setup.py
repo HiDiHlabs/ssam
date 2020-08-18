@@ -49,6 +49,6 @@ setuptools.setup(
         "pyyaml",
         "dask",
         "zarr",
-        "pytorch",
+        "torch",
     ]
 )

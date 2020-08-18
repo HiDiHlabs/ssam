@@ -12,4 +12,4 @@ pyarrow
 pyyaml
 dask
 zarr
-pytorch
+torch
