@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
 import seaborn as sns
 import multiprocessing
-import os
+import sys, os
 sns.set()
 sns.set_style("whitegrid", {'axes.grid' : False})
 from sklearn import preprocessing
@@ -34,7 +34,7 @@ from scipy.ndimage import zoom
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
-def run_sctransform(data, **kwargs):
+def run_sctransform(data, clip_range=None, verbose=True, **kwargs):
     """
     Run 'sctransform' R package and returns the normalized matrix and the model parameters.
     Package 'feather' is used for the data exchange between R and Python.
@@ -46,6 +46,10 @@ def run_sctransform(data, **kwargs):
         (1) normalized N x D matrix.
         (2) determined model parameters.
     """
+    def _log(m):
+        if verbose:
+            print(m)
+            
     vst_options = ['%s = "%s"'%(k, v) if type(v) is str else '%s = %s'%(k, v) for k, v in kwargs.items()]
     if len(vst_options) == 0:
         vst_opt_str = ''
@@ -53,14 +57,32 @@ def run_sctransform(data, **kwargs):
         vst_opt_str = ', ' + ', '.join(vst_options)
     with TemporaryDirectory() as tmpdirname:
         ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
-        df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
+        _log("Writing temporary files...")
+        if isinstance(data, pd.DataFrame):
+            df = data
+        else:
+            df = pd.DataFrame(data, columns=[str(e) for e in range(data.shape[1])])
         df.to_feather(ifn)
         rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- sctransform::vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
             f.write(rcmd)
-        subprocess.run("Rscript " + rfn, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return pd.read_feather(ofn), pd.read_feather(pfn)
+        _log("Running scTransform via Rscript...")
+        proc = subprocess.Popen(["Rscript", rfn], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        while not proc.poll():
+            c = proc.stdout.read(1)
+            if not c:
+                break
+            if verbose:
+                sys.stdout.write(c.decode("utf-8"))
+        _log("Reading output files...")
+        o, p = pd.read_feather(ofn), pd.read_feather(pfn)
+        _log("Clipping residuals...")
+        if clip_range is None:
+            r = np.sqrt(data.shape[0]/30.0)
+            clip_range = (-r, r)
+        o.clip(*clip_range)
+        return o, p
 
 class SSAMDataset(object):
     """
@@ -890,7 +912,7 @@ class SSAMAnalysis(object):
                 while True:
                     vecs = self.dataset.normalized_vectors[new_labels == cidx]
                     vindices = np.where(new_labels == cidx)[0]
-                    midx = vindices[np.argmin(np.sum(cdist(vecs, vecs), axis=0))]
+                    midx = vindices[np.argmin(np.sum(cdist(vecs, vecs, metric='correlation'), axis=0))]
                     if midx == prev_midx:
                         break
                     prev_midx = midx
@@ -1099,8 +1121,10 @@ class SSAMAnalysis(object):
         
         return
     
-    def _map_celltype(self, centroid, exclude_gene_indices=None, chunk_size=1024**3):
+    def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
         ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
+        vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
+        total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
         chunk_cnt = 0
         for chunk_x in range(0, self.dataset.vf_norm.shape[0], vf_chunkxysize):
             for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
@@ -1133,11 +1157,9 @@ class SSAMAnalysis(object):
                 
         max_corr = np.zeros(self.dataset.vf_norm.shape) - 1 # range from -1 to +1
         max_corr_idx = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1 # -1 for background
-        vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
-        total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
         for cidx, centroid in enumerate(centroids):
             print("Generating cell-type map for centroid #%d..."%cidx)
-            ctmap = self._map_celltype(centroid, exclude_gene_indices=None, chunk_size=1024**3)
+            ctmap = self._map_celltype(centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3)
             mask = max_corr < ctmap
             max_corr[mask] = ctmap[mask]
             max_corr_idx[mask] = cidx
