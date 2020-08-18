@@ -37,7 +37,7 @@ from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 import pyarrow
 from packaging import version
 
-def run_sctransform(data, clip_range=None, verbose=True, **kwargs):
+def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwargs):
     """
     Run 'sctransform' R package and returns the normalized matrix and the model parameters.
     Package 'feather' is used for the data exchange between R and Python.
@@ -59,6 +59,8 @@ def run_sctransform(data, clip_range=None, verbose=True, **kwargs):
     else:
         vst_opt_str = ', ' + ', '.join(vst_options)
     with TemporaryDirectory() as tmpdirname:
+        if debug_path:
+            tmpdirname = debug_path
         ifn, ofn, pfn, rfn = [os.path.join(tmpdirname, e) for e in ["in.feather", "out.feather", "fit_params.feather", "script.R"]]
         _log("Writing temporary files...")
         if isinstance(data, pd.DataFrame):
