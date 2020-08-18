@@ -1022,9 +1022,9 @@ class SSAMAnalysis(object):
                 sub_lbls = dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_
                 for sub_lbl in set(list(sub_lbls)):
                     if sub_lbl == -1:
-                        all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
+                        all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = -1
                         continue
-                    all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
+                    all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = global_lbl_idx
                     global_lbl_idx += 1
         else:
             all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
