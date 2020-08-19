@@ -584,7 +584,7 @@ class SSAMAnalysis(object):
         
         return
 
-    def label_transfer(self, labeled_data, labels, method='correlation', normalize=True):
+    def label_transfer(self, labeled_data, labels, method='correlation', normalize=True, transfer_options={}):
         if normalize:
             X1 = preprocessing.normalize(self.dataset.normalized_vectors, norm='l2', axis=1)
             X2 = preprocessing.normalize(labeled_data, norm='l2', axis=1)
@@ -592,6 +592,7 @@ class SSAMAnalysis(object):
             X1 = self.dataset.normalized_vectors
             X2 = labeled_data
         if method == 'correlation':
+            min_r = transfer_options.get('min_r', 0.6)
             X1_uniq_labels = np.unique(self.dataset.cluster_labels)
             X2_uniq_labels = np.unique(labels)
             X1_centroids = np.zeros([len(X1_uniq_labels), len(self.dataset.genes)])
@@ -605,6 +606,8 @@ class SSAMAnalysis(object):
                 for j, cj in enumerate(X2_centroids):
                     centroid_corrs[i, j] = corr(ci, cj)
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
+            max_corrs = np.max(centroid_corrs, axis=1)
+            transferred_centroid_labels[max_corrs < min_r] = -1
             transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int)
             for idx, lbl in enumerate(transferred_centroid_labels):
                 transferred_labels[self.dataset.cluster_labels == idx] = lbl
