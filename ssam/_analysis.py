@@ -585,28 +585,32 @@ class SSAMAnalysis(object):
         return
 
     def map_celltypes_aaec(self, X=None, labels=None, min_norm=0, epochs=1000):
+        if labels is None:
+            labels = self.dataset.cluster_labels
+        valid_indices = labels > -1
+        _labels = labels[valid_indices]
         if X is None:
-            valid_indices = self.dataset.cluster_labels > -1
-            X = self.dataset.normalized_vectors[valid_indices]
-            labels = self.dataset.cluster_labels[valid_indices]
+            X = self.dataset.normalized_vectors
+        _X = X[valid_indices]
+                
         model = AAEClassifier(verbose=self.verbose)
         nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
         vf_nonzero = self.dataset.vf.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
         
         self._m("Training model...")
         model.train(vf_nonzero.astype('float32'),
-                    X.astype('float32'),
-                    labels,
-                    np.max(labels) + 1, epochs=epochs)
+                    _X.astype('float32'),
+                    _labels,
+                    np.max(_labels) + 1, epochs=epochs)
         
         self._m("Predicting probabilities...")
-        labels, max_probs = model.predict_labels(nonzero_vf_z)
+        predicted_labels, max_probs = model.predict_labels(nonzero_vf_z)
         
         self._m("Generating cell-type map...")
         ctmaps = np.zeros(ds.vf_norm.shape, dtype=int)
         max_probs_map = np.zeros(ds.vf_norm.shape, dtype=float)
         
-        ctmaps[nonzero_mask] = labels
+        ctmaps[nonzero_mask] = predicted_labels
         max_probs_map[nonzero_mask] = max_probs
         
         self.dataset.max_probabilities = max_probs_map
