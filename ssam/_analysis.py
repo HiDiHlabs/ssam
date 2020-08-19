@@ -583,6 +583,34 @@ class SSAMAnalysis(object):
         self.dataset.filtered_cluster_labels = new_labels
         
         return
+
+    def map_celltypes_aaec(self, X=None, labels=None, min_norm=0, epochs=1000):
+        if X is None:
+            valid_indices = self.dataset.cluster_labels > -1
+            X = self.dataset.normalized_vectors[valid_indices]
+            labels = self.dataset.cluster_labels[valid_indices]
+        model = AAEClassifier(verbose=self.verbose)
+        nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
+        vf_nonzero = self.dataset.vf.reshape[-1, len(self.dataset.genes)][np.ravel(nonzero_mask)]
+        
+        self._m("Training model...")
+        model.train(vf_nonzero,
+                    X,
+                    labels,
+                    np.max(labels) + 1, epochs=epochs)
+        
+        self._m("Predicting probabilities...")
+        labels, max_probs = model_scrna.predict_labels(nonzero_vf_z)
+        
+        self._m("Generating cell-type map...")
+        ctmaps = np.zeros(ds.vf_norm.shape, dtype=int)
+        max_probs_map = np.zeros(ds.vf_norm.shape, dtype=float)
+        
+        ctmaps[nonzero_mask] = labels
+        max_probs_map[nonzero_mask] = max_probs
+        
+        self.dataset.max_probabilities = max_probs_map
+        self.dataset.celltype_maps = ctmaps
     
     def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
         ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)

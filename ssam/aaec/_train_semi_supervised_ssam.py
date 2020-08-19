@@ -1,4 +1,6 @@
 import torch
+cuda = torch.cuda.is_available()
+
 import itertools
 import numpy as np
 
@@ -9,8 +11,6 @@ import torch.optim as optim
 
 from ._model import Q_net, P_net, D_net_cat, D_net_gauss
 from ._train_utils import *
-
-cuda = torch.cuda.is_available()
 
 
 def _train_epoch(
@@ -173,7 +173,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     return models
 
 
-def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, output_dir, config_dict):
+def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, output_dir, config_dict, verbose):
     '''
     Train the full model.
     '''
@@ -198,14 +198,15 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
 
         learning_curve.append(all_losses)
 
-        report_loss(
-            epoch+1,
-            all_losses,
-            descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss'],
-            output_dir=output_dir)
-        
-        if epoch % 10 == 9:
-            val_acc = classification_accuracy(Q, valid_loader)
-            print('Validation accuracy: {} %'.format(val_acc))
+        if verbose:
+            report_loss(
+                epoch+1,
+                all_losses,
+                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss'],
+                output_dir=output_dir)
+
+            if epoch % 10 == 9:
+                val_acc = classification_accuracy(Q, valid_loader)
+                print('Validation accuracy: {} %'.format(val_acc))
 
     return Q, P, learning_curve

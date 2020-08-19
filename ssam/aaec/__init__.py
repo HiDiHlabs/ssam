@@ -60,7 +60,7 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class AAEClassifier:
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, verbose=True):
         if config_path:
             #self.config_dict = self._load_configuration("aaec/_config.yml")['semi_supervised']
             self.config_dict = self._load_configuration(config_path)
@@ -78,6 +78,7 @@ class AAEClassifier:
                 }
             }
         self.tensor_dtype = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+        self.verbose = verbose
     
     def _load_configuration(self, path):
         with open(path, 'r') as f_cfg:
@@ -113,7 +114,8 @@ class AAEClassifier:
             n_features=n_genes,
             z_dim=z_size,
             output_dir=None,
-            config_dict=self.config_dict
+            config_dict=self.config_dict,
+            verbose=self.verbose
         )
         self.Q = Q
         self.P = P
