@@ -125,14 +125,23 @@ class AAEClassifier:
         self.P = P
         self.learning_curve = learning_curve
     
-    def predict_labels(self, X):
-        batch_size = 10000
+    def predict_labels(self, X, normalize=True):
+        if isinstance(X, da.core.Array):
+            dask = True
+        else:
+            dask = False
+        chunk_size = 10000
         labels = []
         max_probs = []
-        X = torch.tensor(X).type(self.tensor_dtype)
         with torch.no_grad():
-            for batch_idx in range(0, X.shape[0], batch_size):
-                arr = self.Q(X[batch_idx:batch_idx+batch_size])[0].cpu().detach().numpy()
+            for chunk_idx in range(0, X.shape[0], chunk_size):
+                X_chunk = X[chunk_idx:chunk_idx+chunk_size]
+                if dask:
+                    X_chunk = X_chunk.compute()
+                if normalize:
+                    X_chunk = sklearn.preprocessing.normalize(X_chunk, norm='l2', axis=1)
+                X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
+                arr = self.Q(X_chunk)[0].cpu().detach().numpy()
                 labels += list(arr.argmax(axis=1))
                 max_probs += list(arr.max(axis=1))
         return np.array(labels), np.array(max_probs)

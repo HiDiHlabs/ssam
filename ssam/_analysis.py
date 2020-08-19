@@ -604,7 +604,7 @@ class SSAMAnalysis(object):
                     np.max(_labels) + 1, epochs=epochs)
         
         self._m("Predicting probabilities...")
-        predicted_labels, max_probs = model.predict_labels(nonzero_vf_z)
+        predicted_labels, max_probs = model.predict_labels(vf_nonzero)
         
         self._m("Generating cell-type map...")
         ctmaps = np.zeros(ds.vf_norm.shape, dtype=int)
