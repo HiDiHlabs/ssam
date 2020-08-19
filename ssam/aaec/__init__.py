@@ -3,8 +3,7 @@ from ._train_semi_supervised_ssam import train
 import torch
 import yaml
 import numpy as np
-
-from sklearn.preprocessing import normalize
+import sklearn
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
     def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10000):
@@ -28,7 +27,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
             if dask:
                 chunk = chunk.compute()
             if self.normalize:
-                chunk = normalize(chunk, norm='l2', axis=1)
+                chunk = sklearn.preprocessing.normalize(chunk, norm='l2', axis=1)
             if self.labels is not None:
                 chunk_labels = self.labels[s]
             for i in range(chunk.shape[0]):
@@ -46,7 +45,7 @@ class _Dataset(torch.utils.data.Dataset):
         self.labels = labels
         self.vectors = vectors
         if normalize:
-            self.vectors = normalize(self.vectors, norm='l2', axis=1)
+            self.vectors = sklearn.preprocessing.normalize(self.vectors, norm='l2', axis=1)
 
     def __len__(self):
         return len(self.vectors)
