@@ -66,9 +66,9 @@ class SSAMDataset(object):
     def selected_vectors(self):
         if self._selected_vectors is None:
             assert self._local_maxs is not None
-            self._selected_vectors = np.stack([self.vf_zarr.get_coordinate_selection(
-                tuple(list(self.local_maxs) + [[gidx] * len(self.local_maxs[0])])
-            ) for gidx in range(len(self.genes))]).T
+            mask = np.zeros(self.vf_norm.shape, dtype=bool)
+            mask[self.local_maxs] = True
+            self._selected_vectors = self.vf.reshape([-1, len(self.genes)])[np.ravel(mask)].compute()
         return self._selected_vectors
     
     @selected_vectors.setter

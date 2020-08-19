@@ -1,27 +1,57 @@
 from ._train_semi_supervised_ssam import train
 
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
-
 import yaml
 
+from sklearn.preprocessing import normalize
 
-class _Dataset(torch.utils.data.Dataset):
-    def __init__(self, vectors, labels=None):
+class ChunkedDataset(torch.utils.data.IterableDataset):
+    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10000):
+        self.vectors = vectors
+        self.labels = labels
+        self.normalize = normalize
+        self.chunk_size = chunk_size
+        self.shuffle = shuffle
+
+    def __iter__(self):
+        if isinstance(self.vectors, da.core.Array):
+            dask = True
+        else:
+            dask = False
+        seq_indices = np.arange(self.vectors.shape[0])
+        if self.shuffle:
+            np.random.shuffle(seq_indices)
+        chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.vectors.shape[0], self.chunk_size)]
+        for s in chunk_indices:
+            chunk = self.vectors[s]
+            if dask:
+                chunk = chunk.compute()
+            if self.normalize:
+                chunk = normalize(chunk, norm='l2', axis=1)
+            if self.labels is not None:
+                chunk_labels = self.labels[s]
+            for i in range(chunk.shape[0]):
+                if self.labels is None:
+                    l = -1
+                else:
+                    l = chunk_labels[i]
+                yield chunk[i], l
+    
+    def __len__(self):
+        return len(self.vectors)
+
+class Dataset(torch.utils.data.Dataset):
+    def __init__(self, vectors, labels=None, normalize=True):
         self.labels = labels
         self.vectors = vectors
-        if isinstance(vectors, da.core.Array):
-            self.dask = True
-        else:
-            self.dask = False
-            
+        if normalize:
+            self.vectors = normalize(self.vectors, norm='l2', axis=1)
+
     def __len__(self):
         return len(self.vectors)
 
     def __getitem__(self, index):
         v = self.vectors[index]
-        if self.dask:
-            v = v.compute()
         if self.labels is None:
             l = -1
         else:
@@ -64,14 +94,15 @@ class AAEClassifier:
                 weights.append(1./s)
             else:
                 weights.append(0)
-        sampler = WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
-        
-        dataset_labeled = _Dataset(labeled_data, labels)
-        dataset_unlabeled = _Dataset(unlabeled_data)
 
-        labeled = DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
-        unlabeled = DataLoader(dataset_unlabeled, batch_size=batch_size, shuffle=True)
-        valid = DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
+        sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
+
+        dataset_labeled = _Dataset(labeled_data, labels)
+        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, chunk_size=batch_size)
+
+        labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
+        unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
+        valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
         
         Q, P, learning_curve = train(
             labeled,

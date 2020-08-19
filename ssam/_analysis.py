@@ -33,6 +33,7 @@ from packaging import version
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 from .aaec import AAEClassifier
 
+
 def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwargs):
     """
     Run 'sctransform' R package and returns the normalized matrix and the model parameters.
@@ -93,8 +94,6 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
         return o, p
 
 
-    
-        
 class SSAMAnalysis(object):
     """
     A class to run SSAM analysis.
