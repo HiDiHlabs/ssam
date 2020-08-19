@@ -587,8 +587,8 @@ class SSAMAnalysis(object):
     def label_transfer(self, labeled_data, labels, method='correlation', normalize=True):
         uniq_labels = np.unique(labels)
         if normalize:
-            X1 = normalize(self.dataset.normalized_vectors, norm='l2', axis=1)
-            X2 = normalize(labeled_data, norm='l2', axis=1)
+            X1 = preprocessing.normalize(self.dataset.normalized_vectors, norm='l2', axis=1)
+            X2 = preprocessing.normalize(labeled_data, norm='l2', axis=1)
         else:
             X1 = self.dataset.normalized_vectors
             X2 = labeled_data
