@@ -294,7 +294,7 @@ class SSAMAnalysis(object):
                 del self.dataset.zarr_group['vf_normalized']
                 del self.dataset.zarr_group['normalized_vectors']
             else:
-                self.dataset.vf_normalized = self.dataset.zarr_group['vf_normalized']
+                self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
                 self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
                 self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
                 return
