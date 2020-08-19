@@ -6,7 +6,7 @@ import numpy as np
 
 from sklearn.preprocessing import normalize
 
-class ChunkedDataset(torch.utils.data.IterableDataset):
+class _ChunkedDataset(torch.utils.data.IterableDataset):
     def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10000):
         self.vectors = vectors
         self.labels = labels
@@ -41,7 +41,7 @@ class ChunkedDataset(torch.utils.data.IterableDataset):
     def __len__(self):
         return len(self.vectors)
 
-class Dataset(torch.utils.data.Dataset):
+class _Dataset(torch.utils.data.Dataset):
     def __init__(self, vectors, labels=None, normalize=True):
         self.labels = labels
         self.vectors = vectors
