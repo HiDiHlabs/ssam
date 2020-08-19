@@ -600,7 +600,7 @@ class SSAMAnalysis(object):
                     np.max(labels) + 1, epochs=epochs)
         
         self._m("Predicting probabilities...")
-        labels, max_probs = model_scrna.predict_labels(nonzero_vf_z)
+        labels, max_probs = model.predict_labels(nonzero_vf_z)
         
         self._m("Generating cell-type map...")
         ctmaps = np.zeros(ds.vf_norm.shape, dtype=int)
@@ -661,7 +661,7 @@ class SSAMAnalysis(object):
         self.dataset.celltype_maps = max_corr_idx
         return
 
-    def filter_celltypemaps(self, min_r=0.6, min_norm=0.1, min_blob_area=0, filter_params={}, output_mask=None):
+    def filter_celltypemaps(self, min_p=0.6, min_r=0.6, min_norm=0.1, min_blob_area=0, filter_params={}, output_mask=None):
         """
         Post-filter cell type maps created by `map_celltypes`.
 
@@ -691,7 +691,11 @@ class SSAMAnalysis(object):
         for cidx in np.unique(self.dataset.celltype_maps):
             if cidx == -1:
                 continue
-            ctcorr = self.dataset.get_celltype_correlation(cidx)
+            if self.dataset.max_probabilities:
+                ctcorr = self.dataset.get_celltype_probability(cidx)
+                min_r = min_p
+            else:
+                ctcorr = self.dataset.get_celltype_correlation(cidx)
             if isinstance(min_norm, str):
                 for z in range(self.dataset.shape[2]):
                     vf_norm_z = self.dataset.vf_norm[..., z].compute()

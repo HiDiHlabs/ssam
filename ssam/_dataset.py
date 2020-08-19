@@ -545,7 +545,7 @@ class SSAMDataset(object):
 
     def get_celltype_correlation(self, idx):
         """
-        Get correlation values of a cell type map between the given cluster's centroid to the vector field.
+        Get maximum correlation values of a cell type map between the given cluster's centroid to the vector field.
         
         :param idx: Index of a cluster
         :type idx: int
@@ -554,4 +554,17 @@ class SSAMDataset(object):
         """
         rtn = np.zeros_like(self.max_correlations) - 1
         rtn[self.celltype_maps == idx] = self.max_correlations[self.celltype_maps == idx]
+        return rtn
+    
+    def get_celltype_probability(self, idx):
+        """
+        Get maximum probability map of a cell type.
+        
+        :param idx: Index of a cluster
+        :type idx: int
+        :return: Maximum probability map
+        :rtype: numpy.ndarray
+        """
+        rtn = np.zeros_like(self.max_probabilities) - 1
+        rtn[self.celltype_maps == idx] = self.max_probabilities[self.celltype_maps == idx]
         return rtn
