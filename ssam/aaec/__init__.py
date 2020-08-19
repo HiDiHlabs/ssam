@@ -4,6 +4,7 @@ import torch
 import yaml
 import numpy as np
 import sklearn
+import dask.array as da
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
     def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10000):
