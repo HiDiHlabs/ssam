@@ -594,8 +594,8 @@ class SSAMAnalysis(object):
         if method == 'correlation':
             X1_uniq_labels = np.unique(self.dataset.cluster_labels)
             X2_uniq_labels = np.unique(labels)
-            X1_centroids = np.zeros([len(X1_uniq_labels), len(ds.genes)])
-            X2_centroids = np.zeros([len(X2_uniq_labels), len(ds.genes)])
+            X1_centroids = np.zeros([len(X1_uniq_labels), len(self.dataset.genes)])
+            X2_centroids = np.zeros([len(X2_uniq_labels), len(self.dataset.genes)])
             for idx, lbl in enumerate(X1_uniq_labels):
                 X1_centroids[idx] = np.mean(X1[self.dataset.cluster_labels == lbl], axis=0)
             for idx, lbl in enumerate(X2_uniq_labels):
