@@ -594,8 +594,8 @@ class SSAMAnalysis(object):
         vf_nonzero = self.dataset.vf.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
         
         self._m("Training model...")
-        model.train(vf_nonzero,
-                    X,
+        model.train(vf_nonzero.astype('float32'),
+                    X.astype('float32'),
                     labels,
                     np.max(labels) + 1, epochs=epochs)
         

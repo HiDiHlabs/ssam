@@ -7,7 +7,7 @@ import sklearn
 import dask.array as da
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10000):
+    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10*1024*1024/8):
         self.vectors = vectors
         self.labels = labels
         self.normalize = normalize
