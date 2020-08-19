@@ -47,6 +47,7 @@ class SSAMDataset(object):
         self.vf_normalized = None
         self.excluded_clusters = None
         self.celltype_binned_counts = None
+        self.max_probabilities = None
         if len(save_dir) == 0:
             save_dir = mkdtemp()
         if not os.path.exists(save_dir):

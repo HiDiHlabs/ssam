@@ -695,7 +695,7 @@ class SSAMAnalysis(object):
         for cidx in np.unique(self.dataset.celltype_maps):
             if cidx == -1:
                 continue
-            if self.dataset.max_probabilities:
+            if self.dataset.max_probabilities is not None:
                 ctcorr = self.dataset.get_celltype_probability(cidx)
                 min_r = min_p
             else:
