@@ -587,14 +587,14 @@ class SSAMAnalysis(object):
     def label_transfer(self, labeled_data, labels, method='correlation', normalize=True):
         uniq_labels = np.unique(labels)
         if normalize:
-            X1 = normalize(ds.normalized_vectors, norm='l2', axis=1)
+            X1 = normalize(self.dataset.normalized_vectors, norm='l2', axis=1)
             X2 = normalize(labeled_data, norm='l2', axis=1)
         else:
-            X1 = ds.normalized_vectors
+            X1 = self.dataset.normalized_vectors
             X2 = labeled_data
         if method == 'correlation':
-            for idx, lbl in enumerate(np.unique(ds.cluster_labels)):
-                X1_centroids[idx] = np.mean(X1[ds.cluster_labels == lbl], axis=0)
+            for idx, lbl in enumerate(np.unique(self.dataset.cluster_labels)):
+                X1_centroids[idx] = np.mean(X1[self.dataset.cluster_labels == lbl], axis=0)
             for idx, lbl in enumerate(uniq_labels):
                 X2_centroids[idx] = np.mean(X2[labels == lbl], axis=0)
             centroid_corrs = np.zeros([len(X1_centroids), len(X2_centroids)])
@@ -602,9 +602,9 @@ class SSAMAnalysis(object):
                 for j, cj in enumerate(X2_centroids):
                     centroid_corrs[i, j] = corr(ci, cj)
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
-            transferred_labels = np.zeros(ds.normalized_vectors.shape[0], dtype=int)
+            transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int)
             for idx, lbl in enumerate(transferred_centroid_labels):
-                transferred_labels[ds.cluster_labels == idx] = lbl
+                transferred_labels[self.dataset.cluster_labels == idx] = lbl
             self.transferred_labels = transferred_labels
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
@@ -636,8 +636,8 @@ class SSAMAnalysis(object):
         predicted_labels, max_probs = model.predict_labels(vf_nonzero)
         
         self._m("Generating cell-type map...")
-        ctmaps = np.zeros(ds.vf_norm.shape, dtype=int)
-        max_probs_map = np.zeros(ds.vf_norm.shape, dtype=float)
+        ctmaps = np.zeros(self.dataset.vf_norm.shape, dtype=int)
+        max_probs_map = np.zeros(self.dataset.vf_norm.shape, dtype=float)
         
         ctmaps[nonzero_mask] = predicted_labels
         max_probs_map[nonzero_mask] = max_probs
