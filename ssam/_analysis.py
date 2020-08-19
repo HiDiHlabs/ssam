@@ -610,7 +610,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_trasferred_labels=False, min_norm=0, epochs=1000):
+    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, min_norm=0, epochs=1000):
         if labels is None:
             if use_trasferred_labels:
                 labels = self.dataset.transferred_labels
