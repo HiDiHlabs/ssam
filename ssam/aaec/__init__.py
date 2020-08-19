@@ -6,8 +6,9 @@ import numpy as np
 import sklearn
 import dask.array as da
 
+
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=10*1024*1024/8):
+    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000):
         self.vectors = vectors
         self.labels = labels
         self.normalize = normalize
@@ -40,6 +41,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
     
     def __len__(self):
         return len(self.vectors)
+
 
 class _Dataset(torch.utils.data.Dataset):
     def __init__(self, vectors, labels=None, normalize=True):
@@ -99,8 +101,9 @@ class AAEClassifier:
 
         sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
 
+        
         dataset_labeled = _Dataset(labeled_data, labels)
-        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, chunk_size=batch_size)
+        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size))
 
         labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
         unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
