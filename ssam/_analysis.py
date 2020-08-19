@@ -331,7 +331,7 @@ class SSAMAnalysis(object):
                         res[:, gidx]
                     )
                 chunkcnt += 1
-            self.dataset.vf_normalized = vf_normalized
+            self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
     def normalize_vectors(self, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
@@ -618,31 +618,36 @@ class SSAMAnalysis(object):
     
     def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, min_norm=0, epochs=1000):
         if labels is None:
-            if use_trasferred_labels:
+            if use_transferred_labels:
                 labels = self.dataset.transferred_labels
             else:
                 labels = self.dataset.cluster_labels
         valid_indices = labels > -1
         _labels = labels[valid_indices]
+        _uniq_labels = np.unique(_labels)
+        _labels_sorted = np.zeros_like(_labels, dtype=int)
+        for idx, lbl in enumerate(_uniq_labels):
+            _labels_sorted[_labels == lbl] = idx
         if X is None:
             X = self.dataset.normalized_vectors
         _X = X[valid_indices]
                 
         model = AAEClassifier(verbose=self.verbose)
         nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
-        vf_nonzero = self.dataset.vf.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
+        vf_nonzero = self.dataset.vf_normalized.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
         
         self._m("Training model...")
         model.train(vf_nonzero.astype('float32'),
                     _X.astype('float32'),
-                    _labels,
-                    np.max(_labels) + 1, epochs=epochs)
+                    _labels_sorted,
+                    np.max(_labels_sorted) + 1, epochs=epochs)
         
         self._m("Predicting probabilities...")
         predicted_labels, max_probs = model.predict_labels(vf_nonzero)
+        predicted_labels = _uniq_labels[predicted_labels]
         
         self._m("Generating cell-type map...")
-        ctmaps = np.zeros(self.dataset.vf_norm.shape, dtype=int)
+        ctmaps = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1
         max_probs_map = np.zeros(self.dataset.vf_norm.shape, dtype=float)
         
         ctmaps[nonzero_mask] = predicted_labels
@@ -652,6 +657,7 @@ class SSAMAnalysis(object):
         self.dataset.celltype_maps = ctmaps
     
     def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
+        # TODO: this method needs to be rewritten
         ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
         vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
         total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
@@ -660,7 +666,7 @@ class SSAMAnalysis(object):
             for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
                 chunk_cnt += 1
                 print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
-                vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :]
+                vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :].compute()
                 if exclude_gene_indices is not None:
                     vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=3) # np.delete creates a copy, not modifying the original
                 ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)

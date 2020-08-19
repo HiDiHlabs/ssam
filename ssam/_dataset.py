@@ -69,7 +69,7 @@ class SSAMDataset(object):
             assert self._local_maxs is not None
             mask = np.zeros(self.vf_norm.shape, dtype=bool)
             mask[self.local_maxs] = True
-            self._selected_vectors = self.vf.reshape([-1, len(self.genes)])[np.ravel(mask)].compute()
+            self._selected_vectors = self.vf_normalized.reshape([-1, len(self.genes)])[np.ravel(mask)].compute()
         return self._selected_vectors
     
     @selected_vectors.setter
