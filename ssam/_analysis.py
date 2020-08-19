@@ -608,7 +608,7 @@ class SSAMAnalysis(object):
             transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int)
             for idx, lbl in enumerate(transferred_centroid_labels):
                 transferred_labels[self.dataset.cluster_labels == idx] = lbl
-            self.transferred_labels = transferred_labels
+            self.dataset.transferred_labels = transferred_labels
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
         
