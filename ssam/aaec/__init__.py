@@ -2,6 +2,7 @@ from ._train_semi_supervised_ssam import train
 
 import torch
 import yaml
+import numpy as np
 
 from sklearn.preprocessing import normalize
 

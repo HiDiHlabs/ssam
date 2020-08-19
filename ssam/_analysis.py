@@ -591,7 +591,7 @@ class SSAMAnalysis(object):
             labels = self.dataset.cluster_labels[valid_indices]
         model = AAEClassifier(verbose=self.verbose)
         nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
-        vf_nonzero = self.dataset.vf.reshape[-1, len(self.dataset.genes)][np.ravel(nonzero_mask)]
+        vf_nonzero = self.dataset.vf.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
         
         self._m("Training model...")
         model.train(vf_nonzero,
