@@ -63,7 +63,8 @@ class _Dataset(torch.utils.data.Dataset):
 
 
 class AAEClassifier:
-    def __init__(self, config_path=None, verbose=True):
+    def __init__(self, config_path=None, random_seed=0, verbose=True):
+        self.random_seed = random_seed
         if config_path:
             #self.config_dict = self._load_configuration("aaec/_config.yml")['semi_supervised']
             self.config_dict = self._load_configuration(config_path)
@@ -88,6 +89,7 @@ class AAEClassifier:
             self.config_dict = yaml.safe_load(f_cfg)
 
     def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5, normalize=True):
+        torch.manual_seed(self.random_seed)
         assert unlabeled_data.shape[1] == labeled_data.shape[1]
         
         n_genes = unlabeled_data.shape[1]

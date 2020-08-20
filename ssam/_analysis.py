@@ -609,7 +609,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, min_norm=0, epochs=1000):
+    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, min_norm=0, epochs=1000, seed=0):
         if labels is None:
             if use_transferred_labels:
                 labels = self.dataset.transferred_labels
@@ -625,7 +625,7 @@ class SSAMAnalysis(object):
             X = self.dataset.normalized_vectors
         _X = X[valid_indices]
                 
-        model = AAEClassifier(verbose=self.verbose)
+        model = AAEClassifier(verbose=self.verbose, random_seed=seed)
         nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
         vf_nonzero = self.dataset.vf_normalized[np.ravel(nonzero_mask)]
         
