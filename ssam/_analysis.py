@@ -275,16 +275,13 @@ class SSAMAnalysis(object):
         self.dataset.local_maxs = tuple([self.dataset.local_maxs[i][ds_indices] for i in range(3)])
         return
 
-    def normalize_vectors_sctransform(self, normalize_vf=True, vst_kwargs={}, max_chunk_size=1024**3/2, re_run=False):
+    def normalize_vectors_sctransform(self, vst_kwargs={}, max_chunk_size=1024**3/2, re_run=False):
         """
         Normalize and regularize vectors using SCtransform
 
         :param use_expanded_vectors: If True, use averaged vectors nearby local maxima
             of the vector field.
         :type use_expanded_vectors: bool
-        :param normalize_vf: If True, the vector field is also normalized
-            using the same parameters used to normalize the local maxima.
-        :type normalize_vf: bool
         :param vst_kwargs: Optional keywords arguments for sctransform's vst function.
         :type vst_kwargs: dict
         """
@@ -299,33 +296,33 @@ class SSAMAnalysis(object):
                 self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
                 return
 
-        self._m("Running scTransform...")
+        self._m("Running sctransform...")
         norm_vec, fit_params = run_sctransform(self.dataset.selected_vectors, **vst_kwargs)
-        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
 
-        if normalize_vf:
-            self._m("Normalizing vector field...")
-            flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
-            flat_vf.compute_chunk_sizes()
-            nvec_total = flat_vf.shape[0]
-            vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=nvec_total, dtype='f4')
-            chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
-            total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
-            for i in range(total_chunkcnt):
-                self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
-                vecs = flat_vf[i*chunk_size:(i+1)*chunk_size].compute()
-                nonzero_mask = np.sum(vecs, axis=1) > 0
-                vecs_nonzero = vecs[nonzero_mask]
-                regressor_data = np.ones([vecs_nonzero.shape[0], 2])
-                regressor_data[:, 1] = np.log10(np.sum(vecs_nonzero, axis=1))
-                mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    res_nonzero = (vecs_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
-                res_nonzero = np.nan_to_num(res_nonzero)
-                res = np.zeros_like(vecs)
-                res[nonzero_mask] = res_nonzero
-                vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
-            self.dataset.vf_normalized = da.from_zarr(vf_normalized)
+        self._m("Normalizing vector field...")
+        flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
+        flat_vf.compute_chunk_sizes()
+        nvec_total = flat_vf.shape[0]
+        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=nvec_total, dtype='f4')
+        chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
+        total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
+        for i in range(total_chunkcnt):
+            self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
+            vecs = flat_vf[i*chunk_size:(i+1)*chunk_size].compute()
+            nonzero_mask = np.sum(vecs, axis=1) > 0
+            vecs_nonzero = vecs[nonzero_mask]
+            regressor_data = np.ones([vecs_nonzero.shape[0], 2])
+            regressor_data[:, 1] = np.log10(np.sum(vecs_nonzero, axis=1))
+            mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
+            with np.errstate(divide='ignore', invalid='ignore'):
+                res_nonzero = (vecs_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
+            res_nonzero = np.nan_to_num(res_nonzero)
+            res = np.zeros_like(vecs)
+            res[nonzero_mask] = res_nonzero
+            vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
+            
+        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
+        self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
     def normalize_vectors(self, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
