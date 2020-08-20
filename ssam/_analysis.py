@@ -289,9 +289,9 @@ class SSAMAnalysis(object):
         :type vst_kwargs: dict
         """
 
-        if 'nonzero_vf_normalized' in self.dataset.zarr_group:
+        if 'vf_normalized' in self.dataset.zarr_group:
             if re_run:
-                del self.dataset.zarr_group['nonzero_vf_normalized']
+                del self.dataset.zarr_group['vf_normalized']
                 del self.dataset.zarr_group['normalized_vectors']
             else:
                 self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
