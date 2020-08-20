@@ -87,7 +87,7 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5):
+    def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5, normalize=True):
         assert unlabeled_data.shape[1] == labeled_data.shape[1]
         
         n_genes = unlabeled_data.shape[1]
@@ -102,8 +102,8 @@ class AAEClassifier:
         sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
 
         
-        dataset_labeled = _Dataset(labeled_data, labels)
-        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size))
+        dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
+        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size))
 
         labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
         unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
