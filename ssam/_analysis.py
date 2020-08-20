@@ -285,16 +285,17 @@ class SSAMAnalysis(object):
         :param vst_kwargs: Optional keywords arguments for sctransform's vst function.
         :type vst_kwargs: dict
         """
+            
+        if not re_run and 'vf_normalized' in self.dataset.zarr_group and 'normalized_vectors' in self.dataset.zarr_group:
+            self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
+            self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
+            self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
+            return
 
         if 'vf_normalized' in self.dataset.zarr_group:
-            if re_run:
-                del self.dataset.zarr_group['vf_normalized']
-                del self.dataset.zarr_group['normalized_vectors']
-            else:
-                self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
-                self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
-                self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
-                return
+            del self.dataset.zarr_group['vf_normalized']
+        if 'normalized_vectors' in self.dataset.zarr_group:
+            del self.dataset.zarr_group['normalized_vectors']
 
         self._m("Running sctransform...")
         norm_vec, fit_params = run_sctransform(self.dataset.selected_vectors, **vst_kwargs)
