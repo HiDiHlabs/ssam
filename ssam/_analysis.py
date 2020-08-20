@@ -305,7 +305,7 @@ class SSAMAnalysis(object):
         flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
         flat_vf.compute_chunk_sizes()
         nvec_total = flat_vf.shape[0]
-        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=nvec_total, dtype='f4')
+        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=[nvec_total, len(self.dataset.genes)], dtype='f4')
         chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
         total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
         for i in range(total_chunkcnt):
