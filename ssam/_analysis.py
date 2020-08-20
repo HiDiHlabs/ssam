@@ -300,6 +300,7 @@ class SSAMAnalysis(object):
         norm_vec, fit_params = run_sctransform(self.dataset.selected_vectors, **vst_kwargs)
 
         self._m("Normalizing vector field...")
+        fit_params = np.array(fit_params).T
         flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
         flat_vf.compute_chunk_sizes()
         nvec_total = flat_vf.shape[0]
