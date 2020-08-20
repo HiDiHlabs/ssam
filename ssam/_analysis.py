@@ -289,9 +289,9 @@ class SSAMAnalysis(object):
         :type vst_kwargs: dict
         """
 
-        if 'vf_normalized' in self.dataset.zarr_group:
+        if 'nonzero_vf_normalized' in self.dataset.zarr_group:
             if re_run:
-                del self.dataset.zarr_group['vf_normalized']
+                del self.dataset.zarr_group['nonzero_vf_normalized']
                 del self.dataset.zarr_group['normalized_vectors']
             else:
                 self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
@@ -303,34 +303,28 @@ class SSAMAnalysis(object):
         norm_vec, fit_params = run_sctransform(self.dataset.selected_vectors, **vst_kwargs)
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
 
-        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=self.dataset.vf.shape, dtype='f4')
         if normalize_vf:
             self._m("Normalizing vector field...")
-            nzindices = [i.compute() for i in np.nonzero(self.dataset.vf_norm)]
-            nvec_total = len(nzindices[0])
+            flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
+            flat_vf.compute_chunk_sizes()
+            nvec_total = flat_vf.shape[0]
+            vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=nvec_total, dtype='f4')
             chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
             total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
-            chunkcnt = 1
-            fit_params = np.array(fit_params).T
-            for i in range(0, nvec_total, chunk_size):
-                self._m("Processing chunk %d (of %d)..."%(chunkcnt, total_chunkcnt))
-                chunk_coords = tuple([idx[i:i+chunk_size] for idx in nzindices])
-                nvec = len(chunk_coords[0])
-                vecs = np.stack([self.dataset.vf_zarr.get_coordinate_selection(
-                    tuple(list(chunk_coords) + [[gidx] * nvec])
-                ) for gidx in range(len(self.dataset.genes))]).T
-                regressor_data = np.ones([nvec, 2])
-                regressor_data[:, 1] = np.log10(np.sum(vecs, axis=1))
+            for i in range(total_chunkcnt):
+                self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
+                vecs = flat_vf[i*chunk_size:(i+1)*chunk_size].compute()
+                nonzero_mask = np.sum(vecs, axis=1) > 0
+                vecs_nonzero = vecs[nonzero_mask]
+                regressor_data = np.ones([vecs_nonzero.shape[0], 2])
+                regressor_data[:, 1] = np.log10(np.sum(vecs_nonzero, axis=1))
                 mu = np.exp(np.dot(regressor_data, fit_params[1:, :]))
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    res = (vecs - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
-                res = np.nan_to_num(res)
-                for gidx in range(len(self.dataset.genes)):
-                    vf_normalized.set_coordinate_selection(
-                        tuple(list(chunk_coords) + [[gidx] * nvec]),
-                        res[:, gidx]
-                    )
-                chunkcnt += 1
+                    res_nonzero = (vecs_nonzero - mu) / np.sqrt(mu + mu**2 / fit_params[0, :])
+                res_nonzero = np.nan_to_num(res_nonzero)
+                res = np.zeros_like(vecs)
+                res[nonzero_mask] = res_nonzero
+                vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
             self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
@@ -634,7 +628,7 @@ class SSAMAnalysis(object):
                 
         model = AAEClassifier(verbose=self.verbose)
         nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
-        vf_nonzero = self.dataset.vf_normalized.reshape(-1, len(self.dataset.genes))[np.ravel(nonzero_mask)]
+        vf_nonzero = self.dataset.vf_normalized[np.ravel(nonzero_mask)]
         
         self._m("Training model...")
         model.train(vf_nonzero.astype('float32'),
@@ -684,7 +678,7 @@ class SSAMAnalysis(object):
         """
 
         if self.dataset.vf_normalized is None:
-            vf_normalized = self.dataset.vf_zarr
+            vf_normalized = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
         else:
             vf_normalized = self.dataset.vf_normalized
 
