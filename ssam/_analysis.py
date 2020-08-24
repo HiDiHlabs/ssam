@@ -194,7 +194,7 @@ class SSAMAnalysis(object):
             if not re_run and any(zg['kde_computed']):
                 self._m("Resuming KDE computation...")
             for gidx in range(len(genes)):
-                if zg['kde_computed'][gidx]:
+                if not re_run and zg['kde_computed'][gidx]:
                     continue
                 self._m("Running KDE for gene %s..."%genes[gidx])
                 locs = np.array(locations[gidx])
