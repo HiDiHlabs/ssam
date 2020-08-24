@@ -8,12 +8,13 @@ import dask.array as da
 
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000):
+    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000, random_seed=0):
         self.vectors = vectors
         self.labels = labels
         self.normalize = normalize
         self.chunk_size = chunk_size
         self.shuffle = shuffle
+        self.random_seed = random_seed
 
     def __iter__(self):
         if isinstance(self.vectors, da.core.Array):
@@ -22,6 +23,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
             dask = False
         seq_indices = np.arange(self.vectors.shape[0])
         if self.shuffle:
+            np.random.seed(self.random_seed)
             np.random.shuffle(seq_indices)
         chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.vectors.shape[0], self.chunk_size)]
         for s in chunk_indices:
@@ -104,10 +106,9 @@ class AAEClassifier:
                 weights.append(0)
 
         sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
-
         
         dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
-        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size))
+        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size), random_seed=self.random_seed)
 
         labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
         unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
