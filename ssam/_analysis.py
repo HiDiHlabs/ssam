@@ -197,19 +197,21 @@ class SSAMAnalysis(object):
                 if zg['kde_computed'][gidx]:
                     continue
                 self._m("Running KDE for gene %s..."%genes[gidx])
+                locs = np.array(locations[gidx])
                 kde_shape = tuple(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int))
-                if locations[gidx].shape[-1] == 2:
+                if locs.shape[-1] == 2:
                     loc_z = np.zeros(len(locations[gidx][:, 0]))
                 else:
-                    loc_z = locations[gidx][:, 2]/sampling_distance
+                    loc_z = locs[:, 2]/sampling_distance
                 coords, data = calc_kde(bandwidth/sampling_distance,
-                                        locations[gidx][:, 0]/sampling_distance,
-                                        locations[gidx][:, 1]/sampling_distance,
+                                        locs[:, 0]/sampling_distance,
+                                        locs[:, 1]/sampling_distance,
                                         loc_z,
                                         kde_shape,
                                         prune_coefficient,
                                         0,
                                         self.ncores)
+                data *= locs.shape[0] / 15.74960994572242 # / (2 * np.sqrt(2) * np.pi ** (3/2))
                 self._m("Saving KDE for gene %s..."%genes[gidx])
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
@@ -650,22 +652,18 @@ class SSAMAnalysis(object):
         self.dataset.celltype_maps = ctmaps
     
     def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
-        # TODO: this method needs to be rewritten
-        ctmap = np.zeros(self.dataset.vf_norm.shape, dtype=float)
-        vf_chunkxysize = int((chunk_size // 8 // self.dataset.vf_norm.shape[-1] // len(self.dataset.genes)) ** 0.5)
-        total_chunkcnt = int(np.ceil(self.dataset.vf_norm.shape[0] / vf_chunkxysize) * np.ceil(self.dataset.vf_norm.shape[1] / vf_chunkxysize))
-        chunk_cnt = 0
-        for chunk_x in range(0, self.dataset.vf_norm.shape[0], vf_chunkxysize):
-            for chunk_y in range(0, self.dataset.vf_norm.shape[1], vf_chunkxysize):
-                chunk_cnt += 1
-                print("Processing chunk (%d/%d)..."%(chunk_cnt, total_chunkcnt))
-                vf_chunk = vf_normalized[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :].compute()
-                if exclude_gene_indices is not None:
-                    vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=3) # np.delete creates a copy, not modifying the original
-                ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
-                ctmap_chunk = np.nan_to_num(ctmap_chunk)
-                ctmap[chunk_x:chunk_x+vf_chunkxysize, chunk_y:chunk_y+vf_chunkxysize, :] = ctmap_chunk
-        return ctmap
+        ctmap = np.zeros(self.dataset.vf_normalized.shape[0], dtype=float)
+        chunk_len = int(chunk_size / len(ds.genes) / 8)
+        n_chunks = int(np.ceil(self.dataset.vf_normalized.shape[0] / chunk_len))
+        for i in range(n_chunks):
+            print("Processing chunk (%d/%d)..."%(i, n_chunks))
+            vf_chunk = vf_normalized[i*chunk_len:(i+1)*chunk_len].compute()
+            if exclude_gene_indices is not None:
+                vf_chunk = np.delete(vf_chunk, exclude_gene_indices, axis=1) # np.delete creates a copy, not modifying the original
+            ctmap_chunk = calc_ctmap(centroid, vf_chunk, self.ncores)
+            ctmap_chunk = np.nan_to_num(ctmap_chunk)
+            ctmap[i*chunk_len:(i+1)*chunk_len] = ctmap_chunk
+        return ctmap.reshape(self.dataset.vf_norm.shape)
         
     def map_celltypes(self, centroids=None, exclude_gene_indices=None, chunk_size=1024**3):
         """
@@ -695,8 +693,10 @@ class SSAMAnalysis(object):
 
         max_corr[self.dataset.vf_norm == 0] = -1
         max_corr_idx[self.dataset.vf_norm == 0] = -1
+        self.dataset.max_probabilities = None
         self.dataset.max_correlations = max_corr
         self.dataset.celltype_maps = max_corr_idx
+        
         return
 
     def filter_celltypemaps(self, min_p=0.6, min_r=0.6, min_norm=0.1, min_blob_area=0, filter_params={}, output_mask=None):
