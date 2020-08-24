@@ -200,7 +200,7 @@ class SSAMAnalysis(object):
                 locs = np.array(locations[gidx])
                 kde_shape = tuple(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int))
                 if locs.shape[-1] == 2:
-                    loc_z = np.zeros(len(locations[gidx][:, 0]))
+                    loc_z = np.zeros(len(locs[:, 0]))
                 else:
                     loc_z = locs[:, 2]/sampling_distance
                 coords, data = calc_kde(bandwidth/sampling_distance,
