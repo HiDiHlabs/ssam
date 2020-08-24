@@ -343,12 +343,12 @@ class SSAMAnalysis(object):
         :type scale: bool
         """
         
-        def _normalize(vec):
-            _vec = np.array(vec, copy=True)
+        def _normalize(vecs):
+            _vecs = np.array(vecs, copy=True)
             if normalize_gene:
-                _vec = preprocessing.normalize(_vec, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
+                _vecs = preprocessing.normalize(_vecs, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
             if normalize_vector:
-                _vec = preprocessing.normalize(_vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
+                _vecs = preprocessing.normalize(_vecs, norm="l1", axis=1) * size_after_normalization # Normalize per vector
             if normalize_median:
                 def _n(v):
                     s, m = np.sum(v, axis=1), np.median(v, axis=1)
@@ -357,12 +357,12 @@ class SSAMAnalysis(object):
                     v[s > 0] = v[s > 0] / s[s > 0][:, np.newaxis]
                     v[v == 0] = 0
                     return v
-                _vec = _n(_vec)
+                _vecs = _n(_vecs)
             if log_transform:
-                _vec = np.log(_vec + 1)
+                _vecs = np.log(_vecs + 1)
             if scale:
-                _vec = preprocessing.scale(_vec)
-            return _vec
+                _vecs = preprocessing.scale(_vecs)
+            return _vecs
         
         if not re_run and 'vf_normalized' in self.dataset.zarr_group and 'normalized_vectors' in self.dataset.zarr_group:
             self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
@@ -376,7 +376,7 @@ class SSAMAnalysis(object):
             del self.dataset.zarr_group['normalized_vectors']
         
         self._m("Normalizing vectors...")
-        norm_vec = _normalize(vec)
+        norm_vec = _normalize(self.dataset.selected_vectors)
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
         
         self._m("Normalizing vector field...")
