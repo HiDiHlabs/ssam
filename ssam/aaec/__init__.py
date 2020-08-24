@@ -90,6 +90,8 @@ class AAEClassifier:
 
     def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5, normalize=True):
         torch.manual_seed(self.random_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_seed)
         assert unlabeled_data.shape[1] == labeled_data.shape[1]
         
         n_genes = unlabeled_data.shape[1]
