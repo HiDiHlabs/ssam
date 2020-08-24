@@ -329,7 +329,7 @@ class SSAMAnalysis(object):
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
-    def normalize_vectors(self, normalize_gene=False, normalize_vector=False, normalize_median=False, size_after_normalization=1e4, log_transform=False, scale=False):
+    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False):
         """
         Normalize and regularize vectors
 
@@ -344,7 +344,7 @@ class SSAMAnalysis(object):
         """
         vec = self.dataset.selected_vectors
         if normalize_gene:
-            vec = preprocessing.normalize(vec, norm=norm, axis=0) * size_after_normalization  # Normalize per gene
+            vec = preprocessing.normalize(vec, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
         if normalize_vector:
             vec = preprocessing.normalize(vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
         if normalize_median:
