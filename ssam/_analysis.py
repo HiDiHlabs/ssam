@@ -329,7 +329,7 @@ class SSAMAnalysis(object):
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
-    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False, max_chunk_size=1024**3/2):
+    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False, max_chunk_size=1024**3/2, re_run=False):
         """
         Normalize and regularize vectors
 
@@ -359,13 +359,25 @@ class SSAMAnalysis(object):
                     return v
                 _vec = _n(_vec)
             if log_transform:
-                _vec = np.log2(_vec + 1)
+                _vec = np.log(_vec + 1)
             if scale:
                 _vec = preprocessing.scale(_vec)
             return _vec
+        
+        if not re_run and 'vf_normalized' in self.dataset.zarr_group and 'normalized_vectors' in self.dataset.zarr_group:
+            self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
+            self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
+            self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
+            return
 
+        if 'vf_normalized' in self.dataset.zarr_group:
+            del self.dataset.zarr_group['vf_normalized']
+        if 'normalized_vectors' in self.dataset.zarr_group:
+            del self.dataset.zarr_group['normalized_vectors']
+        
         self._m("Normalizing vectors...")
-        self.dataset.normalized_vectors = _normalize(vec)
+        norm_vec = _normalize(vec)
+        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
         
         self._m("Normalizing vector field...")
         flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
