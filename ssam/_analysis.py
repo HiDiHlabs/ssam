@@ -329,7 +329,7 @@ class SSAMAnalysis(object):
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
-    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False):
+    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False, max_chunk_size=1024**3/2):
         """
         Normalize and regularize vectors
 
@@ -342,25 +342,48 @@ class SSAMAnalysis(object):
         :param scale: If True, vectors are z-scaled (mean centered and scaled by stdev).
         :type scale: bool
         """
-        vec = self.dataset.selected_vectors
-        if normalize_gene:
-            vec = preprocessing.normalize(vec, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
-        if normalize_vector:
-            vec = preprocessing.normalize(vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
-        if normalize_median:
-            def n(v):
-                s, m = np.sum(v, axis=1), np.median(v, axis=1)
-                s[m > 0] = s[m > 0] / m[m > 0]
-                s[m == 0] = 0
-                v[s > 0] = v[s > 0] / s[s > 0][:, np.newaxis]
-                v[v == 0] = 0
-                return v
-            vec = n(vec)
-        if log_transform:
-            vec = np.log2(vec + 1)
-        if scale:
-            vec = preprocessing.scale(vec)
-        self.dataset.normalized_vectors = vec
+        
+        def _normalize(vec):
+            _vec = np.array(vec, copy=True)
+            if normalize_gene:
+                _vec = preprocessing.normalize(_vec, norm="l1", axis=0) * size_after_normalization  # Normalize per gene
+            if normalize_vector:
+                _vec = preprocessing.normalize(_vec, norm="l1", axis=1) * size_after_normalization # Normalize per vector
+            if normalize_median:
+                def _n(v):
+                    s, m = np.sum(v, axis=1), np.median(v, axis=1)
+                    s[m > 0] = s[m > 0] / m[m > 0]
+                    s[m == 0] = 0
+                    v[s > 0] = v[s > 0] / s[s > 0][:, np.newaxis]
+                    v[v == 0] = 0
+                    return v
+                _vec = _n(_vec)
+            if log_transform:
+                _vec = np.log2(_vec + 1)
+            if scale:
+                _vec = preprocessing.scale(_vec)
+            return _vec
+
+        self._m("Normalizing vectors...")
+        self.dataset.normalized_vectors = _normalize(vec)
+        
+        self._m("Normalizing vector field...")
+        flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
+        flat_vf.compute_chunk_sizes()
+        nvec_total = flat_vf.shape[0]
+        vf_normalized = self.dataset.zarr_group.zeros(name='vf_normalized', shape=[nvec_total, len(self.dataset.genes)], dtype='f4')
+        chunk_size = int(np.floor(max_chunk_size / (8 * len(self.dataset.genes)))) # TODO: check actual memory usage
+        total_chunkcnt = int(np.ceil(nvec_total / chunk_size))
+        for i in range(total_chunkcnt):
+            self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
+            vecs = flat_vf[i*chunk_size:(i+1)*chunk_size].compute()
+            nonzero_mask = np.sum(vecs, axis=1) > 0
+            vecs_nonzero = vecs[nonzero_mask]
+            res = np.zeros_like(vecs)
+            res[nonzero_mask] = _normalize(vecs_nonzero)
+            vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
+            
+        self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
     def _correct_cluster_labels(self, cluster_labels, centroid_correction_threshold):
