@@ -688,7 +688,7 @@ class SSAMAnalysis(object):
     
     def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
         ctmap = np.zeros(self.dataset.vf_normalized.shape[0], dtype=float)
-        chunk_len = int(chunk_size / len(ds.genes) / 8)
+        chunk_len = int(chunk_size / len(self.dataset.genes) / 8)
         n_chunks = int(np.ceil(self.dataset.vf_normalized.shape[0] / chunk_len))
         for i in range(n_chunks):
             print("Processing chunk (%d/%d)..."%(i, n_chunks))
