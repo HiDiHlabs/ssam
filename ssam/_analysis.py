@@ -435,7 +435,7 @@ class SSAMAnalysis(object):
             centroids_stdev.append(centroid_stdev)
         return centroids, centroids_stdev#, medoids
 
-    def cluster_vectors(self, pca_dims=10, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
+    def cluster_vectors(self, pca_dims=-1, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
                         metric="correlation", subclustering=True, dbscan_eps=0.4, centroid_correction_threshold=0.8, random_state=0):
         """
         Cluster the given vectors using the specified clustering method.
@@ -466,8 +466,11 @@ class SSAMAnalysis(object):
         """
         
         vecs_normalized = self.dataset.normalized_vectors
-        vecs_normalized_dimreduced = PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
-
+        if pca_dims < 0:
+            vecs_normalized_dimreduced = np.array(vecs_normalized, copy=True)
+        else:
+            vecs_normalized_dimreduced = PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
+        
         def cluster_louvain(vecs):
             k = min(snn_neighbors, vecs.shape[0])
             knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
