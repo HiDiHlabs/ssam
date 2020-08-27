@@ -443,7 +443,7 @@ class SSAMAnalysis(object):
             new_labels[cluster_indices[predicted_labels == -1]] = -1
         return new_labels
 
-    def _calc_centroid(self, cluster_labels):
+    def _calc_centroid(self, cluster_labels, normalize=True, norm='l2'):
         centroids = []
         centroids_stdev = []
         #medoids = []
@@ -451,6 +451,8 @@ class SSAMAnalysis(object):
             if lbl == -1:
                 continue
             cl_vecs = self.dataset.normalized_vectors[cluster_labels == lbl, :]
+            if normalize:
+                preprocessing.normalize(cl_vecs, norm=norm, axis=1)
             #cl_dists = scipy.spatial.distance.cdist(cl_vecs, cl_vecs, metric)
             #medoid = cl_vecs[np.argmin(np.sum(cl_dists, axis=0))]
             centroid = np.mean(cl_vecs, axis=0)
@@ -603,6 +605,7 @@ class SSAMAnalysis(object):
     
     def exclude_and_merge_clusters(self, exclude=[], merge=[], centroid_correction_threshold=0.8):
         """
+        DEPRECATED:
         Exclude bad clusters (including the vectors in the clusters), and merge similar clusters for the downstream analysis.
 
         :param exclude: List of cluster indices to be excluded.
@@ -649,26 +652,24 @@ class SSAMAnalysis(object):
         
         return
 
-    def label_transfer(self, labeled_data, labels, method='correlation', normalize=True, transfer_options={}):
+    def transfer_labels(self, labeled_data, labels, method='correlation', outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, transfer_options={}):
         if normalize:
-            X1 = preprocessing.normalize(self.dataset.normalized_vectors, norm='l2', axis=1)
-            X2 = preprocessing.normalize(labeled_data, norm='l2', axis=1)
+            X = preprocessing.normalize(labeled_data, norm='l2', axis=1)
         else:
-            X1 = self.dataset.normalized_vectors
-            X2 = labeled_data
+            X = labeled_data
+        if outlier_detection_method is not None:
+            labels = self._correct_cluster_labels(labels, outlier_detection_method, outlier_detection_kwargs)
         if method == 'correlation':
             min_r = transfer_options.get('min_r', 0.6)
-            X1_uniq_labels = np.unique(self.dataset.cluster_labels)
-            X2_uniq_labels = np.unique(labels)
-            X1_centroids = np.zeros([len(X1_uniq_labels), len(self.dataset.genes)])
-            X2_centroids = np.zeros([len(X2_uniq_labels), len(self.dataset.genes)])
-            for idx, lbl in enumerate(X1_uniq_labels):
-                X1_centroids[idx] = np.mean(X1[self.dataset.cluster_labels == lbl], axis=0)
-            for idx, lbl in enumerate(X2_uniq_labels):
-                X2_centroids[idx] = np.mean(X2[labels == lbl], axis=0)
-            centroid_corrs = np.zeros([len(X1_centroids), len(X2_centroids)])
-            for i, ci in enumerate(X1_centroids):
-                for j, cj in enumerate(X2_centroids):
+            uniq_labels = np.unique(labels)
+            if uniq_labels[0] == -1:
+                uniq_labels = uniq_labels[1:]
+            centroids = np.zeros([len(uniq_labels), len(self.dataset.genes)])
+            for lbl in enumerate(uniq_labels):
+                centroids[idx] = np.mean(X[labels == lbl], axis=0)
+            centroid_corrs = np.zeros([len(ds.centroids), len(centroids)])
+            for i, ci in enumerate(ds.centroids):
+                for j, cj in enumerate(centroids):
                     centroid_corrs[i, j] = corr(ci, cj)
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
             max_corrs = np.max(centroid_corrs, axis=1)
