@@ -249,10 +249,11 @@ class SSAMDataset(object):
         if len(colors) > 0:
             assert len(colors) == len(ds.centroids)
             cmap = ListedColormap(colors)
-        if not exclude_bad_clusters and self.filtered_cluster_labels is not None:
-            valid_mask = self.filtered_cluster_labels > 0
-            plt.scatter(embedding[:, 0][~valid_mask], embedding[:, 1][~valid_mask], s=s, c=excluded_color)
-            plt.scatter(embedding[:, 0][valid_mask], embedding[:, 1][valid_mask], s=s, c=cols, cmap=cmap)
+            
+        if embedding.shape[0] < len(self.cluster_labels):
+            excluded_mask = self.filtered_cluster_labels == -1
+            plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=excluded_color)
+            plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
         else:
             plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
     
