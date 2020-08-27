@@ -539,8 +539,10 @@ class SSAMAnalysis(object):
         else:
             all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
         
-        if exclude_outliers:
+        if outlier_detection_method:
             new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+        else:
+            new_labels = all_lbls
                 
         centroids, centroids_stdev = self._calc_centroid(new_labels)
 
@@ -560,8 +562,10 @@ class SSAMAnalysis(object):
             for i in sorted(removed_indices, reverse=True):
                 all_lbls[all_lbls > i] -= 1
 
-            if exclude_outliers:
+            if outlier_detection_method:
                 new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+            else:
+                new_labels = all_lbls
             centroids, centroids_stdev = self._calc_centroid(new_labels)
                 
         self.dataset.cluster_labels = all_lbls
