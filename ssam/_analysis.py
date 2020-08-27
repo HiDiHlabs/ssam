@@ -814,6 +814,7 @@ class SSAMAnalysis(object):
                 ctcorr = self.dataset.get_celltype_probability(cidx)
                 if len(ctcorr.shape) == 4:
                     ctcorr = ctcorr[..., 0]
+                min_r = min_p
             else:
                 ctcorr = self.dataset.get_celltype_correlation(cidx)
             if isinstance(min_norm, str):
