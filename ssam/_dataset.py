@@ -256,11 +256,11 @@ class SSAMDataset(object):
         else:
             plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
     
-    def plot_tsne(**kwargs):
-        self.plot_embedding('tsne', **kwargs)
+    def plot_tsne(self, *args, **kwargs):
+        self.plot_embedding('tsne', *args, **kwargs)
 
-    def plot_umap(**kwargs):
-        self.plot_embedding('umap', **kwargs)
+    def plot_umap(self, *args, **kwargs):
+        self.plot_embedding('umap', *args, **kwargs)
     
     def plot_expanded_mask(self, cmap='Greys'): # TODO
         """
