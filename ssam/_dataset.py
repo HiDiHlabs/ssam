@@ -247,7 +247,7 @@ class SSAMDataset(object):
         else:
             cols = None
         if len(colors) > 0:
-            assert len(colors) == len(ds.centroids)
+            assert len(colors) == len(self.centroids)
             cmap = ListedColormap(colors)
             
         if embedding.shape[0] == len(self.cluster_labels):
