@@ -674,9 +674,9 @@ class SSAMAnalysis(object):
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
             max_corrs = np.max(centroid_corrs, axis=1)
             transferred_centroid_labels[max_corrs < min_r] = -1
-            transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int)
+            transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int) - 1
             for idx, lbl in enumerate(transferred_centroid_labels):
-                transferred_labels[self.dataset.cluster_labels == idx] = lbl
+                transferred_labels[self.dataset.filtered_cluster_labels == idx] = lbl
             self.dataset.transferred_labels = transferred_labels
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             if use_transferred_labels:
                 labels = self.dataset.transferred_labels
             else:
-                labels = self.dataset.cluster_labels
+                labels = self.dataset.filtered_cluster_labels
         valid_indices = labels > -1
         _labels = labels[valid_indices]
         _uniq_labels = np.unique(_labels)
