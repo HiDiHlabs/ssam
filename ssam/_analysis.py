@@ -652,7 +652,7 @@ class SSAMAnalysis(object):
         
         return
 
-    def transfer_labels(self, labeled_data, labels, method='correlation', outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, transfer_options={}):
+    def transfer_labels(self, labeled_data, labels, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='correlation', transfer_options={}):
         if normalize:
             X = preprocessing.normalize(labeled_data, norm='l2', axis=1)
         else:
@@ -665,7 +665,7 @@ class SSAMAnalysis(object):
             if uniq_labels[0] == -1:
                 uniq_labels = uniq_labels[1:]
             centroids = np.zeros([len(uniq_labels), len(self.dataset.genes)])
-            for lbl in enumerate(uniq_labels):
+            for idx, lbl in enumerate(uniq_labels):
                 centroids[idx] = np.mean(X[labels == lbl], axis=0)
             centroid_corrs = np.zeros([len(ds.centroids), len(centroids)])
             for i, ci in enumerate(ds.centroids):
