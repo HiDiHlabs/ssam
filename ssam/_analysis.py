@@ -103,8 +103,8 @@ class MedoidCorrelation:
         labels = np.ones(X.shape[0], dtype=int)
         prev_midx = -1
         while True:
-            vindices = np.where(labels > 0)[0]
-            good_X = X[labels > 0]
+            vindices = np.where(labels > -1)[0]
+            good_X = X[labels > -1]
             midx = vindices[np.argmin(np.sum(cdist(good_X, good_X, metric='correlation'), axis=0))]
             if midx == prev_midx:
                 break
