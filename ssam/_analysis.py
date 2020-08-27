@@ -94,6 +94,28 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
         return o, p
 
 
+class MedoidCorrelation:
+    def __init__(self, min_r=0.8):
+        self.min_r = min_r
+
+    def fit_predict(self, X):
+        X = np.array(X, copy=True)
+        labels = np.ones(X.shape[0], dtype=int)
+        prev_midx = -1
+        while True:
+            vindices = np.where(labels > 0)[0]
+            good_X = X[labels > 0]
+            midx = vindices[np.argmin(np.sum(cdist(good_X, good_X, metric='correlation'), axis=0))]
+            if midx == prev_midx:
+                break
+            prev_midx = midx
+            m = X[midx]
+            for vidx, v in zip(vindices, good_X):
+                if corr(v, m) < self.min_r:
+                    labels[vidx] = -1
+        return labels
+
+
 class SSAMAnalysis(object):
     """
     A class to run SSAM analysis.
@@ -398,24 +420,27 @@ class SSAMAnalysis(object):
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
-    def _correct_cluster_labels(self, cluster_labels, centroid_correction_threshold):
+    def _correct_cluster_labels(self, cluster_labels, outlier_detection_method, outlier_detection_kwargs):
+        if outlier_detection_method == 'medoid-correlation':
+            clf = MedoidCorrelation(**outlier_detection_kwargs)
+        elif outlier_detection_method == 'one-class-svm':
+            clf = OneClassSVM(**outlier_detection_kwargs)
+        elif outlier_detection_method == 'robust-covariance':
+            clf = EllipticEnvelope(**outlier_detection_kwargs)
+        elif outlier_detection_method == 'isolation-forest':
+            clf = IsolationForest(**outlier_detection_kwargs)
+        elif outlier_detection_method == 'local-outlier-factor':
+            clf = LocalOutlierFactor(**outlier_detection_kwargs)
+        else:
+            raise NotImplementedError("Method %s is not implemented."%outlier_detection_kwargs['method'])
         new_labels = np.array(cluster_labels, copy=True)
-        if centroid_correction_threshold < 1.0:
-            for cidx in np.unique(cluster_labels):
-                if cidx == -1:
-                    continue
-                prev_midx = -1
-                while True:
-                    vecs = self.dataset.normalized_vectors[new_labels == cidx]
-                    vindices = np.where(new_labels == cidx)[0]
-                    midx = vindices[np.argmin(np.sum(cdist(vecs, vecs, metric='correlation'), axis=0))]
-                    if midx == prev_midx:
-                        break
-                    prev_midx = midx
-                    m = self.dataset.normalized_vectors[midx]
-                    for vidx, v in zip(vindices, vecs):
-                        if corr(v, m) < centroid_correction_threshold:
-                            new_labels[vidx] = -1
+        for cidx in np.unique(cluster_labels):
+            if cidx == -1:
+                continue
+            cluster_indices = np.where(new_labels == lbl)[0]
+            X_cl = self.dataset.normalized_vectors[cluster_indices]
+            predicted_labels = clf.fit_predict(X_cl)
+            new_labels[cluster_indices[predicted_labels == -1]] = -1
         return new_labels
 
     def _calc_centroid(self, cluster_labels):
@@ -436,7 +461,7 @@ class SSAMAnalysis(object):
         return centroids, centroids_stdev#, medoids
 
     def cluster_vectors(self, pca_dims=-1, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
-                        metric="correlation", subclustering=True, dbscan_eps=0.4, centroid_correction_threshold=0.8, random_state=0):
+                        metric="correlation", subclustering=True, dbscan_eps=0.4, outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, random_state=0):
         """
         Cluster the given vectors using the specified clustering method.
 
@@ -513,8 +538,10 @@ class SSAMAnalysis(object):
                     global_lbl_idx += 1
         else:
             all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
+        
+        if exclude_outliers:
+            new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
                 
-        new_labels = self._correct_cluster_labels(all_lbls, centroid_correction_threshold)
         centroids, centroids_stdev = self._calc_centroid(new_labels)
 
         merge_candidates = []
@@ -533,7 +560,8 @@ class SSAMAnalysis(object):
             for i in sorted(removed_indices, reverse=True):
                 all_lbls[all_lbls > i] -= 1
 
-            new_labels = self._correct_cluster_labels(all_lbls, centroid_correction_threshold)
+            if exclude_outliers:
+                new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
             centroids, centroids_stdev = self._calc_centroid(new_labels)
                 
         self.dataset.cluster_labels = all_lbls
