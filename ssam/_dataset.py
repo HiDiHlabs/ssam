@@ -167,13 +167,11 @@ class SSAMDataset(object):
         else:
             return good_vecs
         
-    def plot_tsne(self, re_run=True, pca_dims=-1, n_iter=5000, perplexity=70, early_exaggeration=10,
-                  metric="correlation", exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", tsne_kwargs={}):
+    def run_tsne(self, pca_dims=-1, n_iter=5000, perplexity=70, early_exaggeration=10,
+                  metric="correlation", exclude_bad_clusters=True, random_state=0, tsne_kwargs={}):
         """
-        Scatter plot the tSNE embedding.
+        Run tSNE.
 
-        :param re_run: If false, loads precomputed tSNE result.
-        :type re_run: bool
         :param pca_dims: Number of PCA dimensions used for the tSNE embedding.
         :type pca_dims: int
         :param n_iter: Maximum number of iterations for the tSNE.
@@ -201,28 +199,13 @@ class SSAMDataset(object):
         """
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
-        if re_run or self.tsne is None:
-            pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
-            self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state, **tsne_kwargs).fit_transform(pcs[:, :pca_dims])
-        if self.filtered_cluster_labels is not None:
-            cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
-        else:
-            cols = None
-        if len(colors) > 0:
-            cmap = ListedColormap(colors)
-        if not exclude_bad_clusters and self.filtered_cluster_labels is not None:
-            plt.scatter(self.tsne[:, 0][self.filtered_cluster_labels == -1], self.tsne[:, 1][self.filtered_cluster_labels == -1], s=s, c=excluded_color)
-            plt.scatter(self.tsne[:, 0][self.filtered_cluster_labels != -1], self.tsne[:, 1][self.filtered_cluster_labels != -1], s=s, c=cols, cmap=cmap)
-        else:
-            plt.scatter(self.tsne[:, 0], self.tsne[:, 1], s=s, c=cols, cmap=cmap)
-        return
+        pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
+        self.tsne = TSNE(n_iter=n_iter, perplexity=perplexity, early_exaggeration=early_exaggeration, metric=metric, random_state=random_state, **tsne_kwargs).fit_transform(pcs[:, :pca_dims])
 
-    def plot_umap(self, re_run=True, pca_dims=-1, metric="correlation", min_dist=0.8, exclude_bad_clusters=True, s=None, random_state=0, colors=[], excluded_color="#00000033", cmap="jet", umap_kwargs={}):
+    def run_umap(self, pca_dims=-1, metric="correlation", min_dist=0.8, exclude_bad_clusters=True, random_state=0, umap_kwargs={}):
         """
-        Scatter plot the UMAP embedding.
+        Run UMAP.
 
-        :param re_run: If false, loads precomputed UMAP result.
-        :type re_run: bool
         :param pca_dims: Number of PCA dimensions used for the UMAP embedding.
         :type pca_dims: int
         :param metric: Metric for calculation of distance between vectors in gene expression space.
@@ -246,21 +229,38 @@ class SSAMDataset(object):
         """
         if self.filtered_cluster_labels is None:
             exclude_bad_clusters = False
-        if re_run or self.umap is None:
-            pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
-            self.umap = UMAP(metric=metric, random_state=random_state, min_dist=min_dist, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
+        pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
+        self.umap = UMAP(metric=metric, random_state=random_state, min_dist=min_dist, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
+    
+    def plot_embedding(self, method, s=None, colors=[], excluded_color="#00000033", cmap="jet"):
+        if method == 'umap':
+            embedding = self.umap
+        elif method == 'tsne':
+            embedding = self.tsne
+            
+        if len(colors) == embedding.shape[0]:
+            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors)
+            return
+        
         if self.filtered_cluster_labels is not None:
             cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
         else:
             cols = None
         if len(colors) > 0:
+            assert len(colors) == len(ds.centroids)
             cmap = ListedColormap(colors)
         if not exclude_bad_clusters and self.filtered_cluster_labels is not None:
-            plt.scatter(self.umap[:, 0][self.filtered_cluster_labels == -1], self.umap[:, 1][self.filtered_cluster_labels == -1], s=s, c=excluded_color)
-            plt.scatter(self.umap[:, 0][self.filtered_cluster_labels != -1], self.umap[:, 1][self.filtered_cluster_labels != -1], s=s, c=cols, cmap=cmap)
+            valid_mask = self.filtered_cluster_labels > 0
+            plt.scatter(embedding[:, 0][~valid_mask], embedding[:, 1][~valid_mask], s=s, c=excluded_color)
+            plt.scatter(embedding[:, 0][valid_mask], embedding[:, 1][valid_mask], s=s, c=cols, cmap=cmap)
         else:
-            plt.scatter(self.umap[:, 0], self.umap[:, 1], s=s, c=cols, cmap=cmap)
-        return
+            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
+    
+    def plot_tsne(**kwargs):
+        self.plot_embedding('tsne', **kwargs)
+
+    def plot_umap(**kwargs):
+        self.plot_embedding('umap', **kwargs)
     
     def plot_expanded_mask(self, cmap='Greys'): # TODO
         """
