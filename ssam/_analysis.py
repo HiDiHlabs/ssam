@@ -812,7 +812,8 @@ class SSAMAnalysis(object):
                 continue
             if self.dataset.max_probabilities is not None:
                 ctcorr = self.dataset.get_celltype_probability(cidx)
-                min_r = min_p
+                if len(ctcorr.shape) == 4:
+                    ctcorr = ctcorr[..., 0]
             else:
                 ctcorr = self.dataset.get_celltype_correlation(cidx)
             if isinstance(min_norm, str):
