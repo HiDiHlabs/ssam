@@ -150,10 +150,10 @@ class AAEClassifier:
                 X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
                 arr = self.Q(X_chunk)[0].cpu().detach().numpy()
                 max_indices = arr.argsort(axis=1)
-                label_chunk = np.zeros([arr.shape[0], rank], dtype=int)
+                labels_chunk = np.zeros([arr.shape[0], rank], dtype=int)
                 max_probs_chunk = np.zeros([arr.shape[0], rank], dtype=float)
                 for i in range(rank):
-                    label_chunk[:, i] = max_indices[:, -i-1]
+                    labels_chunk[:, i] = max_indices[:, -i-1]
                     max_probs_chunk[:, i] = arr[np.arange(len(arr)), max_indices[:, -i-1]]
                 labels = np.vstack([labels, labels_chunk])
                 max_probs = np.vstack([max_probs, max_probs_chunk])
