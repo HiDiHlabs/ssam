@@ -90,29 +90,27 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5, normalize=True, weighted=True):
+    def train(self, unlabeled_data, labeled_data, labels, n_classes, epochs=1000, batch_size=1000, z_size=5, normalize=True):
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
         assert unlabeled_data.shape[1] == labeled_data.shape[1]
         
         n_genes = unlabeled_data.shape[1]
+        weights = []
+        for i in range(n_classes):
+            s = np.sum(labels == i)
+            if s > 0:
+                weights.append(1./s)
+            else:
+                weights.append(0)
+
+        sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
         
         dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
         dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=int(np.ceil(len(dataset_labeled) / batch_size) * batch_size), random_seed=self.random_seed)
 
-        if weighted:
-            weights = []
-            for i in range(n_classes):
-                s = np.sum(labels == i)
-                if s > 0:
-                    weights.append(1./s)
-                else:
-                    weights.append(0)
-            sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
-            labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
-        else:
-            labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
+        labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
         unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
         valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
         
@@ -132,14 +130,14 @@ class AAEClassifier:
         self.P = P
         self.learning_curve = learning_curve
     
-    def predict_labels(self, X, normalize=True):
+    def predict_labels(self, X, rank=3, normalize=True):
         if isinstance(X, da.core.Array):
             dask = True
         else:
             dask = False
         chunk_size = 10000
-        labels = []
-        max_probs = []
+        labels = np.zeros([0, rank], dtype=int)
+        max_probs = np.zeros([0, rank], dtype=float)
         with torch.no_grad():
             for chunk_idx in range(0, X.shape[0], chunk_size):
                 X_chunk = X[chunk_idx:chunk_idx+chunk_size]
@@ -149,6 +147,12 @@ class AAEClassifier:
                     X_chunk = sklearn.preprocessing.normalize(X_chunk, norm='l2', axis=1)
                 X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
                 arr = self.Q(X_chunk)[0].cpu().detach().numpy()
-                labels += list(arr.argmax(axis=1))
-                max_probs += list(arr.max(axis=1))
+                max_indices = arr.argsort(axis=1)
+                label_chunk = np.zeros([arr.shape[0], rank], dtype=int)
+                max_probs_chunk = np.zeros([arr.shape[0], rank], dtype=float)
+                for i in range(rank):
+                    label_chunk[:, i] = max_indices[:, -i-1]
+                    max_probs_chunk[:, i] = arr[np.arange(len(arr)), max_indices[:, -i-1]]
+                labels = np.vstack([labels, labels_chunk])
+                max_probs = np.vstack([max_probs, max_probs_chunk])
         return np.array(labels), np.array(max_probs)

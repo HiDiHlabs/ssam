@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, weighted=True, min_norm=0, epochs=1000, seed=0):
+    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, weighted=True, min_norm=0, epochs=1000, n=3, seed=0):
         if labels is None:
             if use_transferred_labels:
                 labels = self.dataset.transferred_labels
@@ -704,22 +704,23 @@ class SSAMAnalysis(object):
         _X = X[valid_indices]
                 
         model = AAEClassifier(verbose=self.verbose, random_seed=seed)
-        nonzero_mask = (self.dataset.vf_norm > min_norm).compute()
-        vf_nonzero = self.dataset.vf_normalized[np.ravel(nonzero_mask)]
+        nonzero_mask = (self.dataset.vf_norm > 0).compute()
+        thresholded_mask = (self.dataset.vf_norm > min_norm).compute()
+        vf_thresholded = self.dataset.vf_normalized[np.ravel(thresholded_mask)]
         
         self._m("Training model...")
-        model.train(vf_nonzero.astype('float32'),
+        model.train(vf_thresholded.astype('float32'),
                     _X.astype('float32'),
                     _labels_sorted,
                     np.max(_labels_sorted) + 1, epochs=epochs, weighted=weighted)
         
         self._m("Predicting probabilities...")
-        predicted_labels, max_probs = model.predict_labels(vf_nonzero)
+        predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)])
         predicted_labels = _uniq_labels[predicted_labels]
         
         self._m("Generating cell-type map...")
-        ctmaps = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1
-        max_probs_map = np.zeros(self.dataset.vf_norm.shape, dtype=float)
+        ctmaps = np.zeros(list(self.dataset.vf_norm.shape) + [n], dtype=int) - 1
+        max_probs_map = np.zeros(list(self.dataset.vf_norm.shape) + [n], dtype=float)
         
         ctmaps[nonzero_mask] = predicted_labels
         max_probs_map[nonzero_mask] = max_probs
