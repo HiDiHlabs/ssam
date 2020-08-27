@@ -667,8 +667,8 @@ class SSAMAnalysis(object):
             centroids = np.zeros([len(uniq_labels), len(self.dataset.genes)])
             for idx, lbl in enumerate(uniq_labels):
                 centroids[idx] = np.mean(X[labels == lbl], axis=0)
-            centroid_corrs = np.zeros([len(ds.centroids), len(centroids)])
-            for i, ci in enumerate(ds.centroids):
+            centroid_corrs = np.zeros([len(self.dataset.centroids), len(centroids)])
+            for i, ci in enumerate(self.dataset.centroids):
                 for j, cj in enumerate(centroids):
                     centroid_corrs[i, j] = corr(ci, cj)
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
