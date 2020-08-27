@@ -800,10 +800,14 @@ class SSAMAnalysis(object):
             # some functions doesn't support param 'offset', therefore temporariliy remove it from here
             filter_offset = filter_params.pop('offset', 0)
         
-        filtered_ctmaps = np.array(self.dataset.celltype_maps)
+        if len(self.dataset.celltype_maps.shape) == 4:
+            ctmaps = self.dataset.celltype_maps[..., 0]
+        else:
+            ctmaps = self.dataset.celltype_maps
+        filtered_ctmaps = np.array(ctmaps)
         mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
         
-        for cidx in np.unique(self.dataset.celltype_maps):
+        for cidx in np.unique(ctmaps):
             if cidx == -1:
                 continue
             if self.dataset.max_probabilities is not None:
