@@ -437,7 +437,7 @@ class SSAMAnalysis(object):
         for cidx in np.unique(cluster_labels):
             if cidx == -1:
                 continue
-            cluster_indices = np.where(new_labels == lbl)[0]
+            cluster_indices = np.where(new_labels == cidx)[0]
             X_cl = self.dataset.normalized_vectors[cluster_indices]
             predicted_labels = clf.fit_predict(X_cl)
             new_labels[cluster_indices[predicted_labels == -1]] = -1
@@ -447,7 +447,7 @@ class SSAMAnalysis(object):
         centroids = []
         centroids_stdev = []
         #medoids = []
-        for lbl in sorted(list(set(cluster_labels))):
+        for lbl in np.unique(cluster_labels):
             if lbl == -1:
                 continue
             cl_vecs = self.dataset.normalized_vectors[cluster_labels == lbl, :]
