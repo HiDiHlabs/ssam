@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, weighted=True, min_norm=0, epochs=1000, n=3, seed=0):
+    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, weighted=True, min_norm=0, epochs=1000, n=1, seed=0):
         if labels is None:
             if use_transferred_labels:
                 labels = self.dataset.transferred_labels
@@ -715,7 +715,7 @@ class SSAMAnalysis(object):
                     np.max(_labels_sorted) + 1, epochs=epochs, weighted=weighted)
         
         self._m("Predicting probabilities...")
-        predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)])
+        predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
         predicted_labels = _uniq_labels[predicted_labels]
         
         self._m("Generating cell-type map...")
@@ -725,6 +725,10 @@ class SSAMAnalysis(object):
         ctmaps[nonzero_mask] = predicted_labels
         max_probs_map[nonzero_mask] = max_probs
         
+        if n == 1:
+            ctmaps = ctmaps[..., 0]
+            max_probs_map = max_probs_map[..., 0]
+            
         self.dataset.max_probabilities = max_probs_map
         self.dataset.celltype_maps = ctmaps
     

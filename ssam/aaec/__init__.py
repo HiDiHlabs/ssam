@@ -132,14 +132,14 @@ class AAEClassifier:
         self.P = P
         self.learning_curve = learning_curve
     
-    def predict_labels(self, X, rank=3, normalize=True):
+    def predict_labels(self, X, n=1, normalize=True):
         if isinstance(X, da.core.Array):
             dask = True
         else:
             dask = False
         chunk_size = 10000
-        labels = np.zeros([0, rank], dtype=int)
-        max_probs = np.zeros([0, rank], dtype=float)
+        labels = np.zeros([0, n], dtype=int)
+        max_probs = np.zeros([0, n], dtype=float)
         with torch.no_grad():
             for chunk_idx in range(0, X.shape[0], chunk_size):
                 X_chunk = X[chunk_idx:chunk_idx+chunk_size]
@@ -150,9 +150,9 @@ class AAEClassifier:
                 X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
                 arr = self.Q(X_chunk)[0].cpu().detach().numpy()
                 max_indices = arr.argsort(axis=1)
-                labels_chunk = np.zeros([arr.shape[0], rank], dtype=int)
-                max_probs_chunk = np.zeros([arr.shape[0], rank], dtype=float)
-                for i in range(rank):
+                labels_chunk = np.zeros([arr.shape[0], n], dtype=int)
+                max_probs_chunk = np.zeros([arr.shape[0], n], dtype=float)
+                for i in range(n):
                     labels_chunk[:, i] = max_indices[:, -i-1]
                     max_probs_chunk[:, i] = arr[np.arange(len(arr)), max_indices[:, -i-1]]
                 labels = np.vstack([labels, labels_chunk])
