@@ -129,7 +129,7 @@ class AAEClassifier:
         
         n_genes = unlabeled_data.shape[1]
         
-        size_limit = 10000
+        size_limit = len(unlabeled_data)
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
