@@ -726,7 +726,8 @@ class SSAMAnalysis(object):
         
         self._m("Predicting probabilities...")
         predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
-        predicted_labels = _uniq_labels[predicted_labels]
+        if not unsupervised:
+            predicted_labels = _uniq_labels[predicted_labels]
         
         self._m("Generating cell-type map...")
         ctmaps = np.zeros(list(self.dataset.vf_norm.shape) + [n], dtype=int) - 1

@@ -182,9 +182,6 @@ def _train_epoch(
 
         # report progress
         # report_progress(float(batch_num) / n_batches)
-        del X
-        del X_noisy
-        del target
         
     return D_loss_cat, D_loss_gauss, G_loss, recon_loss, mode_recon_loss, mutual_info_loss, mode_disentanglement_loss
 
