@@ -33,25 +33,23 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
             np.random.seed(self.random_seed)
             np.random.shuffle(seq_indices)
         seq_indices = seq_indices[:self.size_limit]
-        chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.size_limit, self.chunk_size)]
-        cnt = 0
+        chunked_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.size_limit, self.chunk_size)]
         
-        self.load_next_chunk_async(chunk_indices[0])
-        for idx in range(chunk_indices):
+        self.load_next_chunk_async(chunked_indices[0])
+        for chunk_idx in range(len(chunked_indices)):
             chunk = self.get_chunk()
-            if idx < len(chunk_indices) - 1:
-                self.load_next_chunk_async(chunk_indices[idx+1])
+            if chunk_idx < len(chunked_indices) - 1:
+                self.load_next_chunk_async(chunked_indices[chunk_idx+1])
             if self.normalize:
                 chunk = sklearn.preprocessing.normalize(chunk, norm='l2', axis=1)
             if self.labels is not None:
-                chunk_labels = self.labels[chunk_indices[idx]]
+                chunked_labels = self.labels[chunked_indices[chunk_idx]]
             for i in range(chunk.shape[0]):
                 if self.labels is None:
                     l = -1
                 else:
-                    l = chunk_labels[i]
+                    l = chunked_labels[i]
                 yield chunk[i], l
-                cnt += 1
                 
     def get_chunk(self):
         self.proc.join()
@@ -144,14 +142,15 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, normalize=True, weighted=False):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, size_limit=0, normalize=True, weighted=False):
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
         
         n_genes = unlabeled_data.shape[1]
         
-        size_limit = len(unlabeled_data)
+        if size_limit == 0:
+            size_limit = len(unlabeled_data)
         chunk_size = 10000
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
