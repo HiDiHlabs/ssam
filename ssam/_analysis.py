@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, weighted=False, min_norm=0, epochs=1000, n=1, seed=0):
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, weighted=False, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000):
         if not unsupervised:
             if labels is None:
                 if use_transferred_labels:
@@ -716,13 +716,17 @@ class SSAMAnalysis(object):
         if unsupervised:
             model.train(n_celltypes,
                         vf_thresholded.astype('float32'),
-                        epochs=epochs, weighted=weighted)
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        weighted=weighted)
         else:
             model.train(n_celltypes,
                         vf_thresholded.astype('float32'),
                         _X.astype('float32'),
                         _labels_sorted,
-                        epochs=epochs, weighted=weighted)
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        weighted=weighted)
         
         self._m("Predicting probabilities...")
         predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)

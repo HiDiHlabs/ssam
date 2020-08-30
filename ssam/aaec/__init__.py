@@ -50,7 +50,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
                 cnt += 1
     
     def __len__(self):
-        return len(self.vectors)
+        return min(self.size_limit, len(self.vectors))
 
 
 class _Dataset(torch.utils.data.Dataset):
@@ -129,7 +129,7 @@ class AAEClassifier:
         
         n_genes = unlabeled_data.shape[1]
         
-        size_limit = len(unlabeled_data)
+        size_limit = 10000
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
