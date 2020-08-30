@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, unsupervised=False, weighted=False, min_norm=0, epochs=1000, n=1, seed=0):
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, weighted=False, min_norm=0, epochs=1000, n=1, seed=0):
         if not unsupervised:
             if labels is None:
                 if use_transferred_labels:
@@ -703,7 +703,10 @@ class SSAMAnalysis(object):
             if X is None:
                 X = self.dataset.normalized_vectors
             _X = X[valid_indices]
-                
+            if n_celltypes == -1:
+                n_celltypes = np.max(_labels_sorted) + 1
+
+        assert n_celltypes > 0, "The number of cell types has to be more than 0."
         model = AAEClassifier(verbose=self.verbose, random_seed=seed)
         nonzero_mask = (self.dataset.vf_norm > 0).compute()
         thresholded_mask = (self.dataset.vf_norm > min_norm).compute()
@@ -711,11 +714,11 @@ class SSAMAnalysis(object):
         
         self._m("Training model...")
         if unsupervised:
-            model.train(np.max(_labels_sorted) + 1,
+            model.train(n_celltypes,
                         vf_thresholded.astype('float32'),
                         epochs=epochs, weighted=weighted)
         else:
-            model.train(np.max(_labels_sorted) + 1,
+            model.train(n_celltypes,
                         vf_thresholded.astype('float32'),
                         _X.astype('float32'),
                         _labels_sorted,
