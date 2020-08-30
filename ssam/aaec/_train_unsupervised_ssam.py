@@ -85,7 +85,7 @@ def _train_epoch(
         latent_y, latent_z = Q(X_noisy)
         X_mode_rec = P_mode_decoder(latent_y)
 
-        mode_recon_loss = F.binary_cross_entropy(X_mode_rec + epsilon, X + epsilon)
+        mode_recon_loss = F.mse_loss(X_mode_rec + epsilon, X + epsilon)
 
         if params['use_mode_decoder']:
             mode_recon_loss.backward()
@@ -117,7 +117,7 @@ def _train_epoch(
                     latent_vec_B = latent_vec_B.cuda()
                 X_mode_rec_B = P(latent_vec_B)
         
-                mode_disentanglement_loss += -F.binary_cross_entropy(X_mode_rec_A + epsilon, X_mode_rec_B.detach() + epsilon)
+                mode_disentanglement_loss += -F.mse_loss(X_mode_rec_A + epsilon, X_mode_rec_B.detach() + epsilon)
         
         mode_disentanglement_loss /= (n_classes * (n_classes - 1) / 2)
         
