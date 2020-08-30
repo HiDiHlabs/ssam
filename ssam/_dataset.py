@@ -456,7 +456,7 @@ class SSAMDataset(object):
         ctmap = np.zeros([self.filtered_celltype_maps.shape[1], self.filtered_celltype_maps.shape[0], 4])
         ctmap[self.filtered_celltype_maps[..., z].T == centroid_index] = to_rgba(cluster_color)
         ctmap[np.logical_and(self.filtered_celltype_maps[..., z].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
-        if rotate == 1 or rotate == 3:
+        if rotate == 0 or rotate == 2:
             ctmap = ctmap.swapaxes(0, 1)
         ax.imshow(ctmap)
         if rotate == 1:
