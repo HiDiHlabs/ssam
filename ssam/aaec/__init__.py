@@ -30,7 +30,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
         chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.vectors.shape[0], self.chunk_size)]
         cnt = 0
         for s in chunk_indices:
-            if self.size_limit > -1 and cnt >= size_limit:
+            if self.size_limit > -1 and cnt >= self.size_limit:
                 break
             chunk = self.vectors[s]
             if dask:
@@ -40,7 +40,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
             if self.labels is not None:
                 chunk_labels = self.labels[s]
             for i in range(chunk.shape[0]):
-                if self.size_limit > -1 and cnt >= size_limit:
+                if self.size_limit > -1 and cnt >= self.size_limit:
                     break
                 if self.labels is None:
                     l = -1
