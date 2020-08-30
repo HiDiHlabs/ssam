@@ -126,12 +126,12 @@ class AAEClassifier:
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
-        assert unlabeled_data.shape[1] == labeled_data.shape[1]
         
         n_genes = unlabeled_data.shape[1]
         
         size_limit = 10000
         if labeled_data is not None:
+            assert unlabeled_data.shape[1] == labeled_data.shape[1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
             if weighted:
                 weights = []
