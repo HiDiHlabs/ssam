@@ -64,7 +64,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
         self.proc = multiprocessing.Process(target=self._proc, args=(idx, ))
         self.proc.start()
         
-    def _proc(self):
+    def _proc(self, idx):
         data = self.vectors[idx].compute().astype('float32')
         arr = np.frombuffer(self.buffer, dtype='float32').reshape(data.shape)
         np.copyto(arr, data)
