@@ -6,49 +6,71 @@ import yaml
 import numpy as np
 import sklearn
 import dask.array as da
+import multiprocessing
 
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000, random_seed=0, size_limit=-1):
+    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000, random_seed=0, size_limit=0):
         self.vectors = vectors
+        if not isinstance(self.vectors, da.core.Array):
+            self.vectors = da.array(self.vectors)
         self.labels = labels
         self.normalize = normalize
         self.chunk_size = chunk_size
         self.shuffle = shuffle
         self.random_seed = random_seed
-        self.size_limit = size_limit
+        if self.size_limit > 0 and self.size_limit < len(self.vectors):
+            if not self.shuffle:
+                print("Warning: 'size_limit' is smaller than the sample size. 'shuffle' flag has been turned on.")
+                self.shuffle = True
+            self.size_limit = size_limit
+        else:
+            self.size_limit = len(self.vectors)
 
     def __iter__(self):
-        if isinstance(self.vectors, da.core.Array):
-            dask = True
-        else:
-            dask = False
         seq_indices = np.arange(self.vectors.shape[0])
         if self.shuffle:
             np.random.seed(self.random_seed)
             np.random.shuffle(seq_indices)
-        chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.vectors.shape[0], self.chunk_size)]
+        seq_indices = seq_indices[:self.size_limit]
+        chunk_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.size_limit, self.chunk_size)]
         cnt = 0
-        for s in chunk_indices:
-            if self.size_limit > -1 and cnt >= self.size_limit:
-                break
-            chunk = self.vectors[s]
-            if dask:
-                chunk = chunk.compute()
+        
+        self.load_next_chunk_async(chunk_indices[0])
+        for idx in range(chunk_indices):
+            chunk = self.get_chunk()
+            if idx < len(chunk_indices) - 1:
+                self.load_next_chunk_async(chunk_indices[idx+1])
             if self.normalize:
                 chunk = sklearn.preprocessing.normalize(chunk, norm='l2', axis=1)
             if self.labels is not None:
-                chunk_labels = self.labels[s]
+                chunk_labels = self.labels[chunk_indices[idx]]
             for i in range(chunk.shape[0]):
-                if self.size_limit > -1 and cnt >= self.size_limit:
-                    break
                 if self.labels is None:
                     l = -1
                 else:
                     l = chunk_labels[i]
                 yield chunk[i], l
                 cnt += 1
+                
+    def get_chunk(self):
+        self.proc.join()
+        arr = np.frombuffer(self.buffer, dtype='float32').reshape(self.chunk_shape)
+        rtn = np.zeros_like(arr, dtype='float32')
+        np.copyto(rtn, arr)
+        return rtn
     
+    def load_next_chunk_async(self, idx):
+        self.buffer = multiprocessing.RawArray('f', len(idx) * self.vectors.shape[1])
+        self.chunk_shape = [len(idx), self.vectors.shape[1]]
+        self.proc = multiprocessing.Process(target=self._proc, args=(idx, ))
+        self.proc.start()
+        
+    def _proc(self):
+        data = self.vectors[idx].compute().astype('float32')
+        arr = np.frombuffer(self.buffer, dtype='float32').reshape(data.shape)
+        np.copyto(arr, data)
+        
     def __len__(self):
         return min(self.size_limit, len(self.vectors))
 
@@ -129,7 +151,8 @@ class AAEClassifier:
         
         n_genes = unlabeled_data.shape[1]
         
-        size_limit = 10000
+        size_limit = len(unlabeled_data)
+        chunk_size = 10000
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
@@ -146,9 +169,9 @@ class AAEClassifier:
             else:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
             valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
-            size_limit = len(dataset_labeled)
+            chunk_size = size_limit = len(dataset_labeled)
 
-        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=int(np.ceil(size_limit / batch_size) * batch_size), random_seed=self.random_seed, size_limit=size_limit)
+        dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=chunk_size, random_seed=self.random_seed, size_limit=size_limit)
 
         unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
         
