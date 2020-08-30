@@ -261,6 +261,8 @@ def train(train_unlabeled_loader, epochs, n_classes, n_features, z_dim, output_d
     '''
     Train the full model.
     '''
+    torch.cuda.empty_cache()
+
     learning_curve = []
 
     models = _get_models(n_classes, n_features, z_dim, config_dict)
@@ -279,7 +281,7 @@ def train(train_unlabeled_loader, epochs, n_classes, n_features, z_dim, output_d
             z_dim,
             config_dict)
 
-        learning_curve.append(all_losses)
+        learning_curve.append([float(l) for l in all_losses])
 
         if verbose:
             report_loss(
