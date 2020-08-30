@@ -160,7 +160,7 @@ class AAEClassifier:
                 n_features=n_genes,
                 z_dim=z_size,
                 output_dir=None,
-                config_dict=self.config_dict,
+                config_dict=self.config_dict['unsupervised'],
                 verbose=self.verbose
             )
             self.P_mode_decoder = P_mode_decoder
@@ -174,7 +174,7 @@ class AAEClassifier:
                 n_features=n_genes,
                 z_dim=z_size,
                 output_dir=None,
-                config_dict=self.config_dict,
+                config_dict=self.config_dict['semi_supervised'],
                 verbose=self.verbose
             )
         self.Q = Q

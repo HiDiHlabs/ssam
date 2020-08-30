@@ -687,21 +687,22 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, weighted=True, min_norm=0, epochs=1000, n=1, seed=0):
-        if labels is None:
-            if use_transferred_labels:
-                labels = self.dataset.transferred_labels
-            else:
-                labels = self.dataset.filtered_cluster_labels
-        valid_indices = labels > -1
-        _labels = labels[valid_indices]
-        _uniq_labels = np.unique(_labels)
-        _labels_sorted = np.zeros_like(_labels, dtype=int)
-        for idx, lbl in enumerate(_uniq_labels):
-            _labels_sorted[_labels == lbl] = idx
-        if X is None:
-            X = self.dataset.normalized_vectors
-        _X = X[valid_indices]
+    def map_celltypes_aaec(self, X=None, labels=None, use_transferred_labels=False, unsupervised=False, weighted=False, min_norm=0, epochs=1000, n=1, seed=0):
+        if not unsupervised:
+            if labels is None:
+                if use_transferred_labels:
+                    labels = self.dataset.transferred_labels
+                else:
+                    labels = self.dataset.filtered_cluster_labels
+            valid_indices = labels > -1
+            _labels = labels[valid_indices]
+            _uniq_labels = np.unique(_labels)
+            _labels_sorted = np.zeros_like(_labels, dtype=int)
+            for idx, lbl in enumerate(_uniq_labels):
+                _labels_sorted[_labels == lbl] = idx
+            if X is None:
+                X = self.dataset.normalized_vectors
+            _X = X[valid_indices]
                 
         model = AAEClassifier(verbose=self.verbose, random_seed=seed)
         nonzero_mask = (self.dataset.vf_norm > 0).compute()
@@ -709,10 +710,16 @@ class SSAMAnalysis(object):
         vf_thresholded = self.dataset.vf_normalized[np.ravel(thresholded_mask)]
         
         self._m("Training model...")
-        model.train(vf_thresholded.astype('float32'),
-                    _X.astype('float32'),
-                    _labels_sorted,
-                    np.max(_labels_sorted) + 1, epochs=epochs, weighted=weighted)
+        if unsupervised:
+            model.train(np.max(_labels_sorted) + 1,
+                        vf_thresholded.astype('float32'),
+                        epochs=epochs, weighted=weighted)
+        else:
+            model.train(np.max(_labels_sorted) + 1,
+                        vf_thresholded.astype('float32'),
+                        _X.astype('float32'),
+                        _labels_sorted,
+                        epochs=epochs, weighted=weighted)
         
         self._m("Predicting probabilities...")
         predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
