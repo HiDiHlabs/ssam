@@ -19,7 +19,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
         self.chunk_size = chunk_size
         self.shuffle = shuffle
         self.random_seed = random_seed
-        if self.size_limit > 0 and self.size_limit < len(self.vectors):
+        if size_limit > 0 and size_limit < len(self.vectors):
             if not self.shuffle:
                 print("Warning: 'size_limit' is smaller than the sample size. 'shuffle' flag has been turned on.")
                 self.shuffle = True
