@@ -184,8 +184,7 @@ def _train_epoch(
         zero_grad_all(P, Q, D_cat, D_gauss, P_mode_decoder)
 
         # report progress
-        report_progress(float(batch_num) / n_batches)
-
+        report_progress(float(batch_num) / (n_batches - 1))
     print("")
         
     return D_loss_cat, D_loss_gauss, G_loss, recon_loss, mode_recon_loss, mutual_info_loss, mode_disentanglement_loss
