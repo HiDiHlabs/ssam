@@ -745,6 +745,7 @@ class SSAMAnalysis(object):
             ctmaps = ctmaps[..., 0]
             max_probs_map = max_probs_map[..., 0]
             
+        self.dataset.aaec_model = model
         self.dataset.max_probabilities = max_probs_map
         self.dataset.celltype_maps = ctmaps
     
