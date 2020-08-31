@@ -435,9 +435,12 @@ class SSAMDataset(object):
         if z is None:
             z = int(self.vf_norm.shape[2] / 2)
         #p, e = self.centroids[centroid_index], self.centroids_stdev[centroid_index]
-        X = self.vf_normalized[np.ravel(self.celltype_maps == centroid_index)].compute()
-        X = preprocessing.normalize(X, norm='l2', axis=1)
-        p, e = np.mean(X, axis=0), np.std(X, axis=0)
+        X = self.vf_normalized[np.ravel(self.filtered_celltype_maps == centroid_index)].compute()
+        if len(X) > 0:
+            X = preprocessing.normalize(X, norm='l2', axis=1)
+            p, e = np.mean(X, axis=0), np.std(X, axis=0)
+        else:
+            p = e = np.zeros(len(self.genes))
         if cluster_name is None:
             cluster_name = "Cluster #%d"%centroid_index
         

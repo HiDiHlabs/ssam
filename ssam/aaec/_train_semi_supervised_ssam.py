@@ -69,8 +69,8 @@ def _train_epoch(
                 # Discriminator phase
                 #######################
                 Q.eval()
-                z_real_cat = sample_categorical(batch_size, n_classes=n_classes)
-                z_real_gauss = Variable(torch.randn(batch_size, z_dim))
+                z_real_cat = sample_categorical(len(X), n_classes=n_classes)
+                z_real_gauss = Variable(torch.randn(len(X), z_dim))
                 if cuda:
                     z_real_cat = z_real_cat.cuda()
                     z_real_gauss = z_real_gauss.cuda()

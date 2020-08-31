@@ -100,7 +100,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
 
 
 class MedoidCorrelation:
-    def __init__(self, min_r=0.8):
+    def __init__(self, min_r=0.85):
         self.min_r = min_r
 
     def fit_predict(self, X):
