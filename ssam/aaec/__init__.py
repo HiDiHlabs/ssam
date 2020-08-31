@@ -155,6 +155,8 @@ class AAEClassifier:
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
+            batch_size = min(batch_size, len(dataset_labeled))
+            chunk_size = sample_size = len(dataset_labeled)
             if weighted:
                 weights = []
                 for i in range(n_classes):
@@ -168,8 +170,6 @@ class AAEClassifier:
             else:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
             valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
-            chunk_size = sample_size = len(dataset_labeled)
-            batch_size = min(batch_size, len(dataset_labeled))
 
         dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=chunk_size, random_seed=self.random_seed, sample_size=sample_size)
 
