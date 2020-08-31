@@ -169,6 +169,7 @@ class AAEClassifier:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
             valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
             chunk_size = sample_size = len(dataset_labeled)
+            batch_size = min(batch_size, len(dataset_labeled))
 
         dataset_unlabeled = _ChunkedDataset(unlabeled_data, shuffle=True, normalize=normalize, chunk_size=chunk_size, random_seed=self.random_seed, sample_size=sample_size)
 
