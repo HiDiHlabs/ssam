@@ -142,30 +142,32 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, sample_size=0, normalize=True, weighted=False):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, sample_size=0, normalize=True, beta=0):
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
         
         n_genes = unlabeled_data.shape[1]
-        
         if sample_size == 0:
             sample_size = len(unlabeled_data)
         chunk_size = 10000
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
+            uniq_labels, samples_per_cls = np.unique(labels, return_counts=True)
+            if uniq_labels[0] == -1:
+                uniq_labels = uniq_labels[1:]
+                samples_per_cls = samples_per_cls[1:]
+                labels = np.array(labels)
+                labeled_data = np.array(labeled_data)[labels != -1]
+                labels = labels[labels != -1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
             batch_size = min(batch_size, len(dataset_labeled))
             chunk_size = sample_size = len(dataset_labeled)
-            if weighted:
-                weights = []
-                for i in range(n_classes):
-                    s = np.sum(labels == i)
-                    if s > 0:
-                        weights.append(1./s)
-                    else:
-                        weights.append(0)
-                sampler = torch.utils.data.WeightedRandomSampler(np.array(weights)[labels], len(labels), replacement=True)
+            if beta > 0:
+                effective_num = 1.0 - np.power(beta, samples_per_cls)
+                weights = (1.0 - beta) / effective_num
+                #weights = weights / np.sum(weights) * len(samples_per_cls)
+                sampler = torch.utils.data.WeightedRandomSampler(weights[labels], len(labels), replacement=True)
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, sampler=sampler)
             else:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)

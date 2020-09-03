@@ -11,6 +11,7 @@ from sklearn.manifold import TSNE
 from umap import UMAP
 from tempfile import mkdtemp
 from matplotlib.colors import ListedColormap
+from sklearn import preprocessing
 from .utils import corr
 
 class SSAMDataset(object):
