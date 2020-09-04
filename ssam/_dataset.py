@@ -394,8 +394,8 @@ class SSAMDataset(object):
             
         plt.gca().set_facecolor(background)
         if domain_background:
-            plt.imshow(inferred_domains, cmap=ListedColormap(colors_domains))
-        plt.imshow(inferred_domains_cells, cmap=ListedColormap(colors_cells))
+            plt.imshow(inferred_domains, cmap=ListedColormap(colors_domains), interpolation='nearest')
+        plt.imshow(inferred_domains_cells, cmap=ListedColormap(colors_cells), interpolation='nearest')
         
         if rotate == 1:
             plt.gca().invert_xaxis()
