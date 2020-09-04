@@ -284,7 +284,7 @@ class AAEClassifier:
                 labels = labels[labels != -1]
             dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
             batch_size = min(batch_size, len(dataset_labeled))
-            chunk_size = max_size = len(dataset_labeled)
+            max_size = len(dataset_labeled)
             if beta > 0:
                 effective_num = 1.0 - np.power(beta, samples_per_cls)
                 weights = (1.0 - beta) / effective_num
