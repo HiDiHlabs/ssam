@@ -687,7 +687,7 @@ class SSAMAnalysis(object):
             raise NotImplementedError("Error: method %s is not available."%method)
         
     
-    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000, sample_size=0):
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000, sample_size=0, chunk_size=100000):
         # beta: CVPR 2019, Class-Balanced Loss Based on Effective Number of Samples
         if not unsupervised:
             if labels is None:

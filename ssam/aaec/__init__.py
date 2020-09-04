@@ -142,7 +142,7 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, sample_size=0, normalize=True, beta=0):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, sample_size=0, chunk_size=10000, normalize=True, beta=0):
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
@@ -150,7 +150,7 @@ class AAEClassifier:
         n_genes = unlabeled_data.shape[1]
         if sample_size == 0:
             sample_size = len(unlabeled_data)
-        chunk_size = 10000
+        #chunk_size = 10000
         if labeled_data is not None:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             uniq_labels, samples_per_cls = np.unique(labels, return_counts=True)
