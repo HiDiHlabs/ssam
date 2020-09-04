@@ -6,7 +6,35 @@ import yaml
 import numpy as np
 import sklearn
 import dask.array as da
+import threading
 import multiprocessing
+import ctypes
+
+
+# https://gist.github.com/liuw/2407154
+def _ctype_async_raise(thread_obj, exception):
+    found = False
+    target_tid = 0
+    for tid, tobj in threading._active.items():
+        if tobj is thread_obj:
+            found = True
+            target_tid = tid
+            break
+
+    if not found:
+        raise ValueError("Invalid thread object")
+
+    ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(target_tid), ctypes.py_object(exception))
+    # ref: http://docs.python.org/c-api/init.html#PyThreadState_SetAsyncExc
+    if ret == 0:
+        raise ValueError("Invalid thread ID")
+    elif ret > 1:
+        # Huh? Why would we notify more than one threads?
+        # Because we punch a hole into C level interpreter.
+        # So it is better to clean up the mess.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(target_tid, NULL)
+        raise SystemError("PyThreadState_SetAsyncExc failed")
+    #print("Successfully set asynchronized exception for", target_tid)
 
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
@@ -26,31 +54,39 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
             self.sample_size = sample_size
         else:
             self.sample_size = len(self.vectors)
+        self.proc = None
 
     def __iter__(self):
-        seq_indices = np.arange(self.vectors.shape[0])
-        if self.shuffle:
-            np.random.seed(self.random_seed)
-            np.random.shuffle(seq_indices)
-        seq_indices = seq_indices[:self.sample_size]
-        chunked_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.sample_size, self.chunk_size)]
-        
-        self.load_next_chunk_async(chunked_indices[0])
-        for chunk_idx in range(len(chunked_indices)):
-            chunk = self.get_chunk()
-            if chunk_idx < len(chunked_indices) - 1:
-                self.load_next_chunk_async(chunked_indices[chunk_idx+1])
-            if self.normalize:
-                chunk = sklearn.preprocessing.normalize(chunk, norm='l2', axis=1)
-            if self.labels is not None:
-                chunked_labels = self.labels[chunked_indices[chunk_idx]]
-            for i in range(chunk.shape[0]):
-                if self.labels is None:
-                    l = -1
-                else:
-                    l = chunked_labels[i]
-                yield chunk[i], l
-                
+        try:
+            seq_indices = np.arange(self.vectors.shape[0])
+            if self.shuffle:
+                np.random.seed(self.random_seed)
+                np.random.shuffle(seq_indices)
+            seq_indices = seq_indices[:self.sample_size]
+            chunked_indices = [sorted(seq_indices[i:i+self.chunk_size]) for i in range(0, self.sample_size, self.chunk_size)]
+
+            self.load_next_chunk_async(chunked_indices[0])
+            for chunk_idx in range(len(chunked_indices)):
+                chunk = self.get_chunk()
+                if chunk_idx < len(chunked_indices) - 1:
+                    self.load_next_chunk_async(chunked_indices[chunk_idx+1])
+                if self.normalize:
+                    chunk = sklearn.preprocessing.normalize(chunk, norm='l2', axis=1)
+                if self.labels is not None:
+                    chunked_labels = self.labels[chunked_indices[chunk_idx]]
+                for i in range(chunk.shape[0]):
+                    if self.labels is None:
+                        l = -1
+                    else:
+                        l = chunked_labels[i]
+                    yield chunk[i], l
+        except KeyboardInterrupt:
+            if self.proc:
+                print("Recived KeyboardInterrupt, trying to stop the loader thread...")
+                _ctype_async_raise(self.proc, KeyboardInterrupt)
+                self.proc.join()
+            raise KeyboardInterrupt
+            
     def get_chunk(self):
         self.proc.join()
         arr = np.frombuffer(self.buffer, dtype='float32').reshape(self.chunk_shape)
@@ -61,11 +97,12 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
     def load_next_chunk_async(self, idx):
         self.buffer = multiprocessing.RawArray('f', len(idx) * self.vectors.shape[1])
         self.chunk_shape = [len(idx), self.vectors.shape[1]]
-        self.proc = multiprocessing.Process(target=self._proc, args=(idx, ))
+        self.proc = threading.Thread(target=self._proc, args=(idx, ))
+        self.proc.daemon = True
         self.proc.start()
         
     def _proc(self, idx):
-        data = self.vectors[idx].compute(scheduler='single-threaded').astype('float32')
+        data = self.vectors[idx].compute().astype('float32')
         arr = np.frombuffer(self.buffer, dtype='float32').reshape(data.shape)
         np.copyto(arr, data)
         
