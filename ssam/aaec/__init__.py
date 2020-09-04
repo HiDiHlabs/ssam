@@ -160,7 +160,7 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
         return rtn, np.array(self.rand_indices, copy=True)
     
     def load_next_chunk_async(self):
-        self.rand_indices = np.random.randint(0, self.vectors.shape[0], self.chunk_size)
+        self.rand_indices = sorted(np.random.randint(0, self.vectors.shape[0], self.chunk_size))
         self.buffer = multiprocessing.RawArray('f', len(self.rand_indices) * self.vectors.shape[1])
         self.chunk_shape = [len(self.rand_indices), self.vectors.shape[1]]
         self.proc = threading.Thread(target=self._proc)
@@ -257,7 +257,6 @@ class AAEClassifier:
         n_genes = unlabeled_data.shape[1]
         if max_size == 0:
             max_size = len(unlabeled_data)
-        #chunk_size = 10000
         if labeled_data is None:
             dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalize=normalize, chunk_size=chunk_size, max_size=max_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
