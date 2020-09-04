@@ -719,6 +719,7 @@ class SSAMAnalysis(object):
                         vf_thresholded.astype('float32'),
                         epochs=epochs,
                         batch_size=batch_size,
+                        chunk_size=chunk_size,
                         max_size=max_size,
                         beta=beta)
         else:
@@ -728,6 +729,7 @@ class SSAMAnalysis(object):
                         _labels_sorted,
                         epochs=epochs,
                         batch_size=batch_size,
+                        chunk_size=chunk_size,
                         beta=beta)
         
         self._m("Predicting probabilities...")
