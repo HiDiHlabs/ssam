@@ -122,14 +122,14 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
             self.max_size = len(self.vectors)
         self.proc = None
         self.load_next_chunk_async()
-        self._cursor = 0
+        self._cursor = -1
 
     def __iter__(self):
         try:
             sample_cnt = 0
             while True:
                 chunk, indices = self.get_chunk()
-                if self._cursor == chunk.shape[0]:
+                if self._cursor == -1:
                     self.load_next_chunk_async()
                     self._cursor = 0
                 if self.labels is not None:
@@ -144,6 +144,7 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
                     yield chunk[i], l
                     if sample_cnt == self.max_size:
                         return
+                self._cursor = -1
         except KeyboardInterrupt:
             if self.proc:
                 print("Recived KeyboardInterrupt, trying to stop the loader thread...")
