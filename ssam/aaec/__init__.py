@@ -249,7 +249,7 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_size=5, max_size=0, chunk_size=10000, normalize=True, beta=0):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalize=True, beta=0):
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
@@ -267,7 +267,7 @@ class AAEClassifier:
                 epochs=epochs,
                 n_classes=n_classes,
                 n_features=n_genes,
-                z_dim=z_size,
+                z_dim=z_dim,
                 output_dir=None,
                 config_dict=self.config_dict['unsupervised'],
                 verbose=self.verbose
@@ -305,7 +305,7 @@ class AAEClassifier:
                 epochs=epochs,
                 n_classes=n_classes,
                 n_features=n_genes,
-                z_dim=z_size,
+                z_dim=z_dim,
                 output_dir=None,
                 config_dict=self.config_dict['semi_supervised'],
                 verbose=self.verbose
@@ -314,12 +314,11 @@ class AAEClassifier:
         self.P = P
         self.learning_curve = learning_curve
 
-    def predict_labels(self, X, n=1, normalize=True):
+    def predict_labels(self, X, n=1, normalize=True, chunk_size=10000):
         if isinstance(X, da.core.Array):
             dask = True
         else:
             dask = False
-        chunk_size = 10000
         labels = np.zeros([0, n], dtype=int)
         max_probs = np.zeros([0, n], dtype=float)
         with torch.no_grad():
