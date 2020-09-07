@@ -116,8 +116,9 @@ def _train_epoch(
             # Semi-supervised phase
             #######################
             if labeled:
-                pred, _ = Q(X)
-                class_loss = F.cross_entropy(pred, target)
+                #pred, _ = Q(X)
+                #class_loss = F.cross_entropy(pred, target)
+                class_loss = Q(X, labels=target)
                 class_loss.backward()
                 classifier_optim.step()
 
