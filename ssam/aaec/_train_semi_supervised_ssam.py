@@ -40,12 +40,13 @@ def _train_epoch(
 
             #X.resize_(batch_size, Q.input_size)
 
-            X_noisy = add_noise(X)
+            #X_noisy = add_noise(X)
 
-            X, X_noisy, target = Variable(X), Variable(X_noisy), Variable(target)
+            #X, X_noisy, target = Variable(X), Variable(X_noisy), Variable(target)
+            X, target = Variable(X), Variable(target)
             if cuda:
-                X, X_noisy, target = X.cuda(), X_noisy.cuda(), target.cuda()
-
+                #X, X_noisy, target = X.cuda(), X_noisy.cuda(), target.cuda()
+                X, target = X.cuda(), target.cuda()
 
             # Init gradients
             zero_grad_all(P, Q, D_cat, D_gauss)
@@ -54,7 +55,8 @@ def _train_epoch(
                 #######################
                 # Reconstruction phase
                 #######################
-                latent_vec = torch.cat(Q(X_noisy), 1)
+                #latent_vec = torch.cat(Q(X_noisy), 1)
+                latent_vec = torch.cat(Q(X), 1)
                 X_rec = P(latent_vec)
 
                 recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
