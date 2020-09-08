@@ -32,14 +32,15 @@ class AngularPenaltySMLoss(nn.Module):
         self.n_features = n_features
         self.eps = eps
 
-    def forward(self, wf, labels):
+    def forward(self, x, labels):
         '''
         input shape (N, n_features)
         '''
-        assert len(wf) == len(labels)
+        assert len(x) == len(labels)
         assert torch.min(labels) >= 0
         assert torch.max(labels) < self.n_features
-
+        
+        wf = F.normalize(x, p=2, dim=1)
         if self.loss_type == 'cosface':
             numerator = self.s * (torch.diagonal(wf.transpose(0, 1)[labels]) - self.m)
         if self.loss_type == 'arcface':
