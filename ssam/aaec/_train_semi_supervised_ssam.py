@@ -101,7 +101,7 @@ def _train_epoch(
                 Q.train()
                 z_fake_cat, z_fake_gauss = Q(X)
                 
-                centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * p[:, i]).sum() for i in range(centroids.shape[0])])
+                centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
 
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
