@@ -14,7 +14,7 @@ from ._train_utils import *
 
 
 def _train_epoch(
-    models, optimizers, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict):
+    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict):
     '''
     Train procedure for one epoch.
     '''
@@ -100,11 +100,13 @@ def _train_epoch(
                 #######################
                 Q.train()
                 z_fake_cat, z_fake_gauss = Q(X)
+                
+                centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * p[:, i]).sum() for i in range(centroids.shape[0])])
 
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
-
-                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon))
+                
+                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon)) + centroid_dist_loss
 
                 G_loss.backward()
                 G_optim.step()
@@ -187,6 +189,15 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
     models = _get_models(n_classes, n_features, z_dim, config_dict)
     optimizers = _get_optimizers(models, config_dict)
     P, Q, D_cat, D_gauss = models
+    
+    # Calculate label centroids
+    centroids = torch.zeros(n_classes, n_features)
+    for X, target in train_labeled_loader:
+        for i in range(n_classes):
+            centroids[i] += X[target == i].sum(dim=0)
+    centroids = F.normalize(centroids, p=2, dim=1)
+    if cuda:
+        centroids = centroids.cuda()
 
     for epoch in range(epochs):
         if epoch == 50: # learning rate decay
@@ -195,6 +206,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
         all_losses = _train_epoch(
             models,
             optimizers,
+            centroids,
             train_labeled_loader,
             train_unlabeled_loader,
             n_classes,
