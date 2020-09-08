@@ -103,8 +103,10 @@ def _train_epoch(
                 
                 #centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
                 c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                centroid_corr_loss = sum([((1 - torch.sum(c_X * centroids[i], dim=1) / (torch.sqrt(torch.sum(c_X ** 2, dim=1)) * torch.sqrt(torch.sum(centroids[i] ** 2)))) * z_fake_cat[:, i]).sum() / n_classes for i in range(n_classes)]) / X.shape[0]
-
+                nom = torch.mm(c_X, centroids)
+                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
+                
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
                 
@@ -193,12 +195,12 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
     P, Q, D_cat, D_gauss = models
     
     # Calculate label centroids
-    centroids = torch.zeros(n_classes, n_features)
+    centroids = torch.zeros(n_features, n_classes)
     for X, target in train_labeled_loader:
         for i in range(n_classes):
-            centroids[i] += X[target == i].sum(dim=0)
-    #centroids = F.normalize(centroids, p=2, dim=1)
-    centroids -= centroids.mean(dim=1).reshape(centroids.shape[0], 1)
+            centroids[:, i] += X[target == i].sum(dim=0)
+    centroids -= centroids.mean(dim=0)
+    
     if cuda:
         centroids = centroids.cuda()
 
