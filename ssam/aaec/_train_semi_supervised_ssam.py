@@ -101,12 +101,14 @@ def _train_epoch(
                 Q.train()
                 z_fake_cat, z_fake_gauss = Q(X)
                 
-                centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
+                #centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
+                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                centroid_corr_loss = sum([((1 - torch.sum(c_X * c_centroids[i], dim=1) / (torch.sqrt(torch.sum(c_X ** 2, dim=1)) * torch.sqrt(torch.sum(c_centroids[i] ** 2)))) * z_fake_cat[:, i]).sum() / n_classes for i in range(n_classes)]) / X.shape[0]
 
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
                 
-                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon)) + centroid_dist_loss
+                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon)) + centroid_corr_loss
 
                 G_loss.backward()
                 G_optim.step()
@@ -118,9 +120,9 @@ def _train_epoch(
             # Semi-supervised phase
             #######################
             if labeled:
-                #pred, _ = Q(X)
-                #class_loss = F.cross_entropy(pred, target)
-                class_loss = Q(X, labels=target)
+                pred, _ = Q(X)
+                class_loss = F.cross_entropy(pred, target)
+                #class_loss = Q(X, labels=target)
                 class_loss.backward()
                 classifier_optim.step()
 
@@ -195,7 +197,8 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
     for X, target in train_labeled_loader:
         for i in range(n_classes):
             centroids[i] += X[target == i].sum(dim=0)
-    centroids = F.normalize(centroids, p=2, dim=1)
+    #centroids = F.normalize(centroids, p=2, dim=1)
+    centroids -= centroids.mean(dim=1).reshape(centroids.shape[0], 1)
     if cuda:
         centroids = centroids.cuda()
 
