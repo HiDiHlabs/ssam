@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import sigmoid
-from loss_functions import AngularPenaltySMLoss
+from .loss_functions import AngularPenaltySMLoss
 
 
 class BaseModel(nn.Module):
@@ -48,11 +48,12 @@ class Q_net(BaseModel):
         x = self.lin2(x)
         x = F.relu(self.bn2(x))
         z_gauss = self.bn_z(self.lin3_gauss(x))
-        if labels:
-            L = self.adms_loss(x, labels)
+        y_cat = self.bn_y(self.lin3_cat(x))
+        if labels is not None:
+            L = self.adms_loss(y_cat, labels)
             return L
         else:
-            y_cat = F.softmax(self.bn_y(self.lin3_cat(x)), dim=1)
+            y_cat = F.softmax(y_cat, dim=1)
             return y_cat, z_gauss
 
 
