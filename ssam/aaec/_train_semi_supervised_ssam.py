@@ -103,7 +103,7 @@ def _train_epoch(
                 
                 #centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
                 c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                centroid_corr_loss = sum([((1 - torch.sum(c_X * c_centroids[i], dim=1) / (torch.sqrt(torch.sum(c_X ** 2, dim=1)) * torch.sqrt(torch.sum(c_centroids[i] ** 2)))) * z_fake_cat[:, i]).sum() / n_classes for i in range(n_classes)]) / X.shape[0]
+                centroid_corr_loss = sum([((1 - torch.sum(c_X * centroids[i], dim=1) / (torch.sqrt(torch.sum(c_X ** 2, dim=1)) * torch.sqrt(torch.sum(centroids[i] ** 2)))) * z_fake_cat[:, i]).sum() / n_classes for i in range(n_classes)]) / X.shape[0]
 
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
