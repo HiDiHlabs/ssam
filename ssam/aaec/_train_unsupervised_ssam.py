@@ -14,7 +14,7 @@ from ._train_utils import *
 
 
 def _train_epoch(
-    models, optimizers, train_unlabeled_loader, n_classes, z_dim, config_dict):
+    models, optimizers, train_unlabeled_loader, n_classes, z_dim, noise, config_dict):
     '''
     Train procedure for one epoch.
     '''
@@ -33,7 +33,7 @@ def _train_epoch(
 
     # Loop through the unlabeled dataset
     for batch_num, (X, target) in enumerate(train_unlabeled_loader):
-        X_noisy = add_noise(X)
+        X_noisy = add_noise(X, noise)
 
         X, X_noisy, target = Variable(X), Variable(X_noisy), Variable(target)
         if cuda:
@@ -256,7 +256,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     models = P, Q, D_cat, D_gauss, P_mode_decoder
     return models
 
-def train(train_unlabeled_loader, epochs, n_classes, n_features, z_dim, output_dir, config_dict, verbose):
+def train(train_unlabeled_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose):
     '''
     Train the full model.
     '''
@@ -278,6 +278,7 @@ def train(train_unlabeled_loader, epochs, n_classes, n_features, z_dim, output_d
             train_unlabeled_loader,
             n_classes,
             z_dim,
+            noise,
             config_dict)
 
         learning_curve.append([float(l) for l in all_losses])

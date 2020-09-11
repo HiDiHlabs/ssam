@@ -8,11 +8,11 @@ import numpy as np
 cuda = torch.cuda.is_available()
 
 
-def add_noise(input):
+def add_noise(input, amount=0.3):
     '''
     Add random noise to input.
     '''
-    noise = torch.randn(input.size()) * 0.3
+    noise = torch.randn(input.size()) * amount
     noisy_input = input + noise
     return noisy_input
 

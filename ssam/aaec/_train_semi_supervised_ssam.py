@@ -14,7 +14,7 @@ from ._train_utils import *
 
 
 def _train_epoch(
-    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict):
+    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict, noise):
     '''
     Train procedure for one epoch.
     '''
@@ -40,7 +40,7 @@ def _train_epoch(
 
             #X.resize_(batch_size, Q.input_size)
 
-            #X_noisy = add_noise(X)
+            X_noisy = add_noise(X, noise)
 
             #X, X_noisy, target = Variable(X), Variable(X_noisy), Variable(target)
             X, target = Variable(X), Variable(target)
@@ -102,15 +102,15 @@ def _train_epoch(
                 z_fake_cat, z_fake_gauss = Q(X)
                 
                 #centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
-                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                nom = torch.mm(c_X, centroids)
-                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
-                centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
+                #c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                #nom = torch.mm(c_X, centroids)
+                #denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                #centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
                 
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
                 
-                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon)) + centroid_corr_loss
+                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon))# + centroid_corr_loss
 
                 G_loss.backward()
                 G_optim.step()
@@ -182,7 +182,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     return models
 
 
-def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, output_dir, config_dict, verbose):
+def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose):
     '''
     Train the full model.
     '''
@@ -216,7 +216,8 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             train_unlabeled_loader,
             n_classes,
             z_dim,
-            config_dict)
+            config_dict,
+            noise)
 
         learning_curve.append([float(l) for l in all_losses])
         

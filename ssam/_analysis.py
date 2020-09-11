@@ -657,7 +657,7 @@ class SSAMAnalysis(object):
         
         return
 
-    def transfer_labels(self, labeled_data, labels, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='correlation', transfer_options={}):
+    def transfer_labels(self, labeled_data, labels, use_filtered_cluster_labels=False, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='correlation', transfer_options={}):
         if normalize:
             X = preprocessing.normalize(labeled_data, norm='l2', axis=1)
         else:
@@ -680,14 +680,19 @@ class SSAMAnalysis(object):
             max_corrs = np.max(centroid_corrs, axis=1)
             transferred_centroid_labels[max_corrs < min_r] = -1
             transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int) - 1
-            for idx, lbl in enumerate(transferred_centroid_labels):
-                transferred_labels[self.dataset.filtered_cluster_labels == idx] = lbl
-            self.dataset.transferred_labels = transferred_labels
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
+            
+        if use_filtered_cluster_labels:
+            cluster_labels = self.dataset.filtered_cluster_labels
+        else:
+            cluster_labels = self.dataset.cluster_labels
+        for idx, lbl in enumerate(transferred_centroid_labels):
+            transferred_labels[cluster_labels == idx] = lbl
+        self.dataset.transferred_labels = transferred_labels
         
     
-    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000, max_size=0, chunk_size=100000, z_dim=2):
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000, max_size=0, chunk_size=100000, z_dim=2, noise=0.1):
         # beta: CVPR 2019, Class-Balanced Loss Based on Effective Number of Samples
         if not unsupervised:
             if labels is None:
@@ -722,7 +727,8 @@ class SSAMAnalysis(object):
                         chunk_size=chunk_size,
                         max_size=max_size,
                         beta=beta,
-                        z_dim=z_dim)
+                        z_dim=z_dim,
+                        noise=noise)
         else:
             model.train(n_celltypes,
                         vf_thresholded.astype('float32'),
@@ -732,7 +738,8 @@ class SSAMAnalysis(object):
                         batch_size=batch_size,
                         chunk_size=chunk_size,
                         beta=beta,
-                        z_dim=z_dim)
+                        z_dim=z_dim,
+                        noise=noise)
         
         self._m("Predicting probabilities...")
         predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
