@@ -22,7 +22,7 @@ def _train_epoch(
 
     # load models and optimizers
     P, Q, D_cat, D_gauss = models
-    auto_encoder_optim, G_optim, D_optim, classifier_optim = optimizers
+    auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim = optimizers
 
     # Set the networks in train mode (apply dropout when needed)
     train_all(P, Q, D_cat, D_gauss)
@@ -91,7 +91,7 @@ def _train_epoch(
 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
-
+                
                 #######################
                 # Generator phase
                 #######################
@@ -108,22 +108,23 @@ def _train_epoch(
 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
-                
+
                 #######################
                 # Correlation phase
                 #######################
-                z_latent_cat, _ = Q(X)
+                latent_y, _ = Q(X)
                 c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
                 nom = torch.mm(c_X, centroids)
                 denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
                 
-                centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
+                centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
                 
                 centroid_corr_loss.backward()
-                G_optim.step()
+                centroid_corr_optim.step()
                 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
+                
                 
             #######################
             # Semi-supervised phase
@@ -160,10 +161,11 @@ def _get_optimizers(models, config_dict, decay=1.0):
 
     G_optim = optim.Adam(Q.parameters(), lr=generator_lr)
     D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_cat.parameters()), lr=discriminator_lr)
+    centroid_corr_optim = optim.Adam(Q.parameters(), lr=generator_lr)
 
     classifier_optim = optim.Adam(Q.parameters(), lr=classifier_lr)
 
-    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim
+    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim
 
     return optimizers
 
