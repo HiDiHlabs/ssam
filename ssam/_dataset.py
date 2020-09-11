@@ -120,7 +120,7 @@ class SSAMDataset(object):
         im = np.array(self.vf_norm, copy=True)
         if rotate == 1 or rotate == 3:
             im = im.swapaxes(0, 1)
-        plt.imshow(im[..., z], cmap=cmap, interpolation=='bilinear')
+        plt.imshow(im[..., z], cmap=cmap, interpolation='nearest')
         if rotate == 1:
             plt.gca().invert_xaxis()
         elif rotate == 2:
@@ -272,7 +272,7 @@ class SSAMDataset(object):
 
         :param cmap: Colormap for the mask.
         """
-        plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap, interpolation=='bilinear')
+        plt.imshow(self.expanded_mask, vmin=0, vmax=1, cmap=cmap, interpolation='nearest')
         return
     
     def plot_correlation_map(self, cmap='hot'): # TODO
@@ -281,7 +281,7 @@ class SSAMDataset(object):
 
         :param cmap: Colormap for the image.
         """
-        plt.imshow(self.corr_map, vmin=0.995, vmax=1.0, cmap=cmap, interpolation=='bilinear')
+        plt.imshow(self.corr_map, vmin=0.995, vmax=1.0, cmap=cmap, interpolation='nearest')
         plt.colorbar()
         return
     
@@ -339,7 +339,7 @@ class SSAMDataset(object):
             sctmap = sctmap.swapaxes(0, 1)
 
         plt.gca().set_facecolor(background)
-        plt.imshow(sctmap, interpolation=='bilinear')
+        plt.imshow(sctmap, interpolation='nearest')
         
         if rotate == 1:
             plt.gca().invert_xaxis()
@@ -394,8 +394,8 @@ class SSAMDataset(object):
             
         plt.gca().set_facecolor(background)
         if domain_background:
-            plt.imshow(inferred_domains, cmap=ListedColormap(colors_domains), interpolation='nearest', interpolation=='bilinear')
-        plt.imshow(inferred_domains_cells, cmap=ListedColormap(colors_cells), interpolation='nearest', interpolation=='bilinear')
+            plt.imshow(inferred_domains, cmap=ListedColormap(colors_domains), interpolation='nearest')
+        plt.imshow(inferred_domains_cells, cmap=ListedColormap(colors_cells), interpolation='nearest')
         
         if rotate == 1:
             plt.gca().invert_xaxis()
@@ -465,7 +465,7 @@ class SSAMDataset(object):
         ctmap[np.logical_and(self.filtered_celltype_maps[..., z].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
         if rotate == 0 or rotate == 2:
             ctmap = ctmap.swapaxes(0, 1)
-        ax.imshow(ctmap, interpolation=='bilinear')
+        ax.imshow(ctmap, interpolation='nearest')
         if rotate == 1:
             ax.invert_xaxis()
         elif rotate == 2:
