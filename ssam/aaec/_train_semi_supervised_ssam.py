@@ -98,12 +98,6 @@ def _train_epoch(
                 Q.train()
                 z_fake_cat, z_fake_gauss = Q(X)
                 
-                #centroid_dist_loss = sum([(torch.norm(X - centroids[i], 2, dim=1) * z_fake_cat[:, i]).sum() for i in range(n_classes)]) / X.shape[0]
-                #c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                #nom = torch.mm(c_X, centroids)
-                #denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
-                #centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
-                
                 D_fake_cat = D_cat(z_fake_cat)
                 D_fake_gauss = D_gauss(z_fake_gauss)
                 
@@ -114,7 +108,23 @@ def _train_epoch(
 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
-
+                
+                #######################
+                # Correlation phase
+                #######################
+                z_latent_cat, _ = Q(X)
+                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                nom = torch.mm(c_X, centroids)
+                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                
+                centroid_corr_loss = ((1 - nom / denom) * z_fake_cat).sum(dim=1).mean()
+                
+                centroid_corr_loss.backward()
+                G_optim.step()
+                
+                # Init gradients
+                zero_grad_all(P, Q, D_cat, D_gauss)
+                
             #######################
             # Semi-supervised phase
             #######################
@@ -128,7 +138,7 @@ def _train_epoch(
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
 
-    return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss
+    return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss, centroid_corr_loss
 
 
 def _get_optimizers(models, config_dict, decay=1.0):
@@ -222,7 +232,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             report_loss(
                 epoch+1,
                 all_losses,
-                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss'],
+                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss', 'centroid_correlation_loss'],
                 output_dir=output_dir)
 
             if epoch % 10 == 9:
