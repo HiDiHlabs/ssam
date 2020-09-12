@@ -38,12 +38,12 @@ def _ctype_async_raise(thread_obj, exception):
 
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalize=True, chunk_size=1000, sample_size=0):
+    def __init__(self, vectors, labels=None, shuffle=True, normalized=True, chunk_size=1000, sample_size=0):
         self.vectors = vectors
         if not isinstance(self.vectors, da.core.Array):
             self.vectors = da.array(self.vectors)
         self.labels = labels
-        self.normalize = normalize
+        self.normalized = normalized
         self.chunk_size = chunk_size
         self.shuffle = shuffle
         if sample_size > 0 and sample_size < len(self.vectors):
@@ -99,7 +99,7 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
         
     def _proc(self, idx):
         data = self.vectors[idx].compute().astype('float32')
-        if self.normalize:
+        if self.normalized:
             data = sklearn.preprocessing.normalize(data, norm='l2', axis=1)
         arr = np.frombuffer(self.buffer, dtype='float32').reshape(data.shape)
         np.copyto(arr, data)
@@ -109,12 +109,12 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
     
     
 class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, normalize=True, chunk_size=100000, max_size=0):
+    def __init__(self, vectors, labels=None, normalized=True, chunk_size=100000, max_size=0):
         self.vectors = vectors
         if not isinstance(self.vectors, da.core.Array):
             self.vectors = da.array(self.vectors)
         self.labels = labels
-        self.normalize = normalize
+        self.normalized = normalized
         self.chunk_size = chunk_size
         if max_size > 0 and max_size < len(self.vectors):
             self.max_size = max_size
@@ -171,7 +171,7 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
     def _proc(self):
         idx = self.rand_indices
         data = self.vectors[idx].compute().astype('float32')
-        if self.normalize:
+        if self.normalized:
             data = sklearn.preprocessing.normalize(data, norm='l2', axis=1)
         arr = np.frombuffer(self.buffer, dtype='float32').reshape(data.shape)
         np.copyto(arr, data)
@@ -181,10 +181,10 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
 
 
 class _Dataset(torch.utils.data.Dataset):
-    def __init__(self, vectors, labels=None, normalize=True):
+    def __init__(self, vectors, labels=None, normalized=True):
         self.labels = labels
         self.vectors = vectors
-        if normalize:
+        if normalized:
             self.vectors = sklearn.preprocessing.normalize(self.vectors, norm='l2', axis=1)
 
     def __len__(self):
@@ -249,7 +249,7 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalize=True, beta=0, noise=0.1):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalized=True, beta=0, noise=0.1):
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
@@ -259,7 +259,7 @@ class AAEClassifier:
         if max_size == 0:
             max_size = len(unlabeled_data)
         if labeled_data is None:
-            dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalize=normalize, chunk_size=chunk_size, max_size=max_size)
+            dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
             Q, P, P_mode_decoder, learning_curve = train_unsupervised(
@@ -283,7 +283,7 @@ class AAEClassifier:
                 labels = np.array(labels)
                 labeled_data = np.array(labeled_data)[labels != -1]
                 labels = labels[labels != -1]
-            dataset_labeled = _Dataset(labeled_data, labels, normalize=normalize)
+            dataset_labeled = _Dataset(labeled_data, labels, normalized=normalized)
             batch_size = min(batch_size, len(dataset_labeled))
             max_size = len(dataset_labeled)
             if beta > 0:
@@ -296,7 +296,7 @@ class AAEClassifier:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
             valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
 
-            dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalize=normalize, chunk_size=chunk_size, max_size=max_size)
+            dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
             Q, P, learning_curve = train_semi_supervised(
@@ -316,7 +316,7 @@ class AAEClassifier:
         self.P = P
         self.learning_curve = learning_curve
 
-    def predict_labels(self, X, n=1, normalize=True, chunk_size=10000):
+    def predict_labels(self, X, n=1, normalized=True, chunk_size=10000):
         if isinstance(X, da.core.Array):
             dask = True
         else:
@@ -328,7 +328,7 @@ class AAEClassifier:
                 X_chunk = X[chunk_idx:chunk_idx+chunk_size]
                 if dask:
                     X_chunk = X_chunk.compute()
-                if normalize:
+                if normalized:
                     X_chunk = sklearn.preprocessing.normalize(X_chunk, norm='l2', axis=1)
                 X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
                 arr = self.Q(X_chunk)[0].cpu().detach().numpy()

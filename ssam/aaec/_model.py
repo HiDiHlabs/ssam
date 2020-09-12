@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import sigmoid
-from ._loss_functions import AngularPenaltySMLoss
 
 
 class BaseModel(nn.Module):
@@ -40,7 +39,6 @@ class Q_net(BaseModel):
         self.lin3_gauss = nn.Linear(hidden_size, z_size)
         # categorical label (y)
         self.lin3_cat = nn.Linear(hidden_size, n_classes)
-        self.adms_loss = AngularPenaltySMLoss(n_classes, loss_type='arcface')
 
     def forward(self, x, labels=None):
         x = F.dropout(self.lin1(x), p=self.dropout, training=self.training)
@@ -48,13 +46,8 @@ class Q_net(BaseModel):
         x = self.lin2(x)
         x = F.relu(self.bn2(x))
         z_gauss = self.bn_z(self.lin3_gauss(x))
-        y_cat = self.bn_y(self.lin3_cat(x))
-        if labels is not None:
-            L = self.adms_loss(y_cat, labels)
-            return L
-        else:
-            y_cat = F.softmax(y_cat, dim=1)
-            return y_cat, z_gauss
+        y_cat = F.softmax(self.bn_y(self.lin3_cat(x)), dim=1)
+        return y_cat, z_gauss
 
 
 class P_net(BaseModel):
