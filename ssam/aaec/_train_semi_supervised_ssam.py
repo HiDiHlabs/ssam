@@ -22,7 +22,7 @@ def _train_epoch(
 
     # load models and optimizers
     P, Q, D_cat, D_gauss = models
-    auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim = optimizers
+    auto_encoder_optim, G_optim, D_optim, classifier_optim = optimizers
 
     # Set the networks in train mode (apply dropout when needed)
     train_all(P, Q, D_cat, D_gauss)
@@ -53,11 +53,16 @@ def _train_epoch(
                 #######################
                 # Reconstruction phase
                 #######################
-                latent_vec = torch.cat(Q(X_noisy), 1)
-                X_rec = P(latent_vec)
+                latent_y, latent_z = Q(X_noisy)
+                
+                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                nom = torch.mm(c_X, centroids)
+                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
 
-                recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
-
+                X_rec = P(torch.cat((latent_y, latent_z, ), 1))
+                
+                recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon) + centroid_corr_loss
                 recon_loss.backward()
                 auto_encoder_optim.step()
 
@@ -108,22 +113,6 @@ def _train_epoch(
 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
-
-                #######################
-                # Correlation phase
-                #######################
-                latent_y, _ = Q(X)
-                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                nom = torch.mm(c_X, centroids)
-                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
-                
-                centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
-                
-                centroid_corr_loss.backward()
-                centroid_corr_optim.step()
-                
-                # Init gradients
-                zero_grad_all(P, Q, D_cat, D_gauss)
                 
                 
             #######################
@@ -139,7 +128,7 @@ def _train_epoch(
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
 
-    return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss, centroid_corr_loss
+    return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss
 
 
 def _get_optimizers(models, config_dict, decay=1.0):
@@ -161,11 +150,10 @@ def _get_optimizers(models, config_dict, decay=1.0):
 
     G_optim = optim.Adam(Q.parameters(), lr=generator_lr)
     D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_cat.parameters()), lr=discriminator_lr)
-    centroid_corr_optim = optim.Adam(Q.parameters(), lr=generator_lr)
 
     classifier_optim = optim.Adam(Q.parameters(), lr=classifier_lr)
 
-    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim
+    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim
 
     return optimizers
 
@@ -234,7 +222,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             report_loss(
                 epoch+1,
                 all_losses,
-                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss', 'centroid_correlation_loss'],
+                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss'],
                 output_dir=output_dir)
 
             if epoch % 10 == 9:
