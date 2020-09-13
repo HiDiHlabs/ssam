@@ -22,7 +22,7 @@ def _train_epoch(
 
     # load models and optimizers
     P, Q, Ga, D_class, D_gauss = models
-    auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim = optimizers
+    auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim, ga_optim = optimizers
 
     # Set the networks in train mode (apply dropout when needed)
     train_all(P, Q, Ga, D_class, D_gauss)
@@ -125,6 +125,25 @@ def _train_epoch(
                 # Init gradients
                 zero_grad_all(P, Q, Ga, D_class, D_gauss)
                 
+                #######################
+                # Gaussian phase
+                #######################
+                z_real_class = Ga(len(X))
+                z_real_gauss = Variable(torch.randn(len(X), z_dim))
+                
+                if cuda:
+                    z_real_class = z_real_class.cuda()
+                    z_real_gauss = z_real_gauss.cuda()
+                
+                D_real_class = D_class(z_real_class)
+                D_real_gauss = D_gauss(z_real_gauss)
+                
+                Ga_loss = - torch.mean(torch.log(1 - D_real_class + epsilon)) - torch.mean(torch.log(1 - D_real_gauss + epsilon))
+                Ga_loss.backward()
+                ga_optim.step()
+                
+                # Init gradients
+                zero_grad_all(P, Q, Ga, D_class, D_gauss)
                 
             #######################
             # Semi-supervised phase
@@ -159,12 +178,13 @@ def _get_optimizers(models, config_dict, decay=1.0):
     auto_encoder_optim = optim.Adam(itertools.chain(Q.parameters(), P.parameters()), lr=auto_encoder_lr)
 
     G_optim = optim.Adam(Q.parameters(), lr=generator_lr)
-    D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_class.parameters(), Ga.parameters()), lr=discriminator_lr)
+    D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_class.parameters()), lr=discriminator_lr)
     centroid_corr_optim = optim.Adam(Q.parameters(), lr=generator_lr)
+    ga_optim = optim.Adam(Ga.parameters(), lr=classifier_lr)
 
-    classifier_optim = optim.Adam(Q.parameters(), lr=classifier_lr)
+    classifier_optim = optim.Adam(itertools.chain(Q.parameters(), Ga.parameters()), lr=classifier_lr)
 
-    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim
+    optimizers = auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim, ga_optim
 
     return optimizers
 
