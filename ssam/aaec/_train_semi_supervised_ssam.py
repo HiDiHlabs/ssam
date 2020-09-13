@@ -203,7 +203,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
 
     models = _get_models(n_classes, n_features, z_dim, config_dict)
     optimizers = _get_optimizers(models, config_dict)
-    P, Q, D_cat, D_gauss = models
+    P, Q, Ga, D_cat, D_gauss = models
     
     # Calculate label centroids
     centroids = torch.zeros(n_features, n_classes)
