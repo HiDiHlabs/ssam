@@ -24,13 +24,15 @@ class GaussianModel(BaseModel):
         self.loc = nn.Parameter(torch.randn(n_classes, z_size), requires_grad=True)
         self.cov_factor = nn.Parameter(torch.randn(n_classes, z_size, 1), requires_grad=True)
         self.cov_diag = nn.Parameter(torch.randn(n_classes, z_size), requires_grad=True)
-        self.mix_weights = nn.Parameter(torch.ones(n_classes), requires_grad=False) # same weights
+        #self.mix_weights = nn.Parameter(torch.ones(n_classes), requires_grad=False) # same weights
         self.n_classes = n_classes
         
     def forward(self, batch_size):
         mvn = D.LowRankMultivariateNormal(self.loc, self.cov_factor, torch.functional.F.elu(self.cov_diag) + 1)
-        gmm = D.MixtureSameFamily(D.Categorical(self.mix_weights), mvn) # mix normal distributions
-        return gmm.sample(torch.Size([batch_size]))
+        #gmm = D.MixtureSameFamily(D.Categorical(self.mix_weights), mvn) # mix normal distributions
+        #return gmm.sample(torch.Size([batch_size]))
+        randidx = torch.randint(0, self.n_classes, (batch_size, ))
+        return mvn.rsample(torch.Size([batch_size]))[torch.arange(batch_size), randidx]
     
     def get_labels(self, loc):
         mvn = D.LowRankMultivariateNormal(self.loc, self.cov_factor, torch.functional.F.elu(self.cov_diag) + 1)
@@ -68,7 +70,7 @@ class Q_net(BaseModel):
         x = F.relu(self.bn2(x))
         z_class = self.bn_z1(self.lin3_class(x))
         z_gauss = self.bn_z2(self.lin3_gauss(x))
-        return z_classs, z_gauss
+        return z_class, z_gauss
 
 
 class P_net(BaseModel):
