@@ -262,7 +262,7 @@ class AAEClassifier:
             dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
-            Q, P, P_mode_decoder, learning_curve = train_unsupervised(
+            Q, Ga, P, P_mode_decoder, learning_curve = train_unsupervised(
                 unlabeled,
                 epochs=epochs,
                 n_classes=n_classes,
@@ -299,7 +299,7 @@ class AAEClassifier:
             dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
-            Q, P, learning_curve = train_semi_supervised(
+            Q, Ga, P, learning_curve = train_semi_supervised(
                 labeled,
                 unlabeled,
                 valid,
@@ -313,6 +313,7 @@ class AAEClassifier:
                 verbose=self.verbose
             )
         self.Q = Q
+        self.Ga = Ga
         self.P = P
         self.learning_curve = learning_curve
 
@@ -331,7 +332,7 @@ class AAEClassifier:
                 if normalized:
                     X_chunk = sklearn.preprocessing.normalize(X_chunk, norm='l2', axis=1)
                 X_chunk = torch.tensor(X_chunk).type(self.tensor_dtype)
-                arr = self.Q(X_chunk)[0].cpu().detach().numpy()
+                arr = self.Ga.get_labels(self.Q(X_chunk)[0]).cpu().detach().numpy()
                 max_indices = arr.argsort(axis=1)
                 labels_chunk = np.zeros([arr.shape[0], n], dtype=int)
                 max_probs_chunk = np.zeros([arr.shape[0], n], dtype=float)

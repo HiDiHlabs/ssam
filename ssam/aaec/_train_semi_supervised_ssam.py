@@ -53,7 +53,7 @@ def _train_epoch(
                 #######################
                 # Reconstruction phase
                 #######################
-                latent_z = Q(X_noisy)
+                latent_z = torch.cat(Q(X_noisy), 1)
                 X_rec = P(latent_z)
 
                 recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
@@ -74,12 +74,12 @@ def _train_epoch(
                     z_real_class = z_real_class.cuda()
                     z_real_gauss = z_real_gauss.cuda()
 
-                z_fake = Q(X)
+                z_fake_class, z_fake_gauss = Q(X)
 
                 D_real_class = D_class(z_real_class)
                 D_real_gauss = D_gauss(z_real_gauss)
-                D_fake_class = D_class(z_fake[:, :z_dim])
-                D_fake_gauss = D_gauss(z_fake[:, z_dim:])
+                D_fake_class = D_class(z_fake_class)
+                D_fake_gauss = D_gauss(z_fake_gauss)
 
                 D_loss_class = - torch.mean(torch.log(D_real_class + epsilon) + torch.log(1 - D_fake_class + epsilon))
                 D_loss_gauss = - torch.mean(torch.log(D_real_gauss + epsilon) + torch.log(1 - D_fake_gauss + epsilon))
@@ -96,10 +96,10 @@ def _train_epoch(
                 # Generator phase
                 #######################
                 Q.train()
-                z_fake = Q(X)
+                z_fake_class, z_fake_gauss = Q(X)
                 
-                D_fake_class = D_class(z_fake[:, :z_dim])
-                D_fake_gauss = D_gauss(z_fake[:, z_dim:])
+                D_fake_class = D_class(z_fake_class)
+                D_fake_gauss = D_gauss(z_fake_gauss)
                 
                 G_loss = - torch.mean(torch.log(D_fake_class + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon))
 
@@ -112,7 +112,7 @@ def _train_epoch(
                 #######################
                 # Correlation phase
                 #######################
-                pred = Ga.get_labels(Q(X)[:, :z_dim])
+                pred = Ga.get_labels(Q(X)[0])
                 c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
                 nom = torch.mm(c_X, centroids)
                 denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
@@ -130,7 +130,7 @@ def _train_epoch(
             # Semi-supervised phase
             #######################
             if labeled:
-                pred = Ga.get_labels(Q(X)[:, :z_dim])
+                pred = Ga.get_labels(Q(X)[0])
                 class_loss = F.cross_entropy(pred, target)
                 class_loss.backward()
                 classifier_optim.step()
@@ -177,7 +177,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
 
     Q = Q_net(z_size=z_dim, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
     P = P_net(z_size=z_dim, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
-    Ga = GaussianModel(z_size=z_dim)
+    Ga = GaussianModel(n_classes=n_classes, z_size=z_dim)
     D_class = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
     D_gauss = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
 
@@ -239,7 +239,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
                 output_dir=output_dir)
 
             if epoch % 10 == 9:
-                val_acc = classification_accuracy(Q, valid_loader)
+                val_acc = classification_accuracy(Q, Ga, valid_loader)
                 print('Validation accuracy: {} %'.format(val_acc))
 
-    return Q, P, learning_curve
+    return Q, Ga, P, learning_curve

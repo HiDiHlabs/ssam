@@ -16,11 +16,13 @@ def add_noise(input, amount=0.3):
     noisy_input = input + noise
     return noisy_input
 
-def predict_labels(Q, X):
+def predict_labels(Q, Ga, X):
     Q.eval()
+    Ga.eval()
 
-    latent_y = Q(X)[0]
-    pred_labels = torch.argmax(latent_y, dim=1)
+    pred = Ga.get_labels(Q(X)[0])
+    
+    pred_labels = torch.argmax(pred, dim=1)
     return pred_labels
 
 def get_categorial(label, n_classes=10):
@@ -58,7 +60,7 @@ def get_adversarial_categorial_weights(latent_y, batch_size, n_classes=10):
     p_w = w / sum(w)
     return p_w
 
-def classification_accuracy(Q, data_loader):
+def classification_accuracy(Q, Ga, data_loader):
     correct = 0
     N = len(data_loader.dataset)
 
@@ -70,12 +72,12 @@ def classification_accuracy(Q, data_loader):
             X, target = X.cuda(), target.cuda()
 
         # encoding phase
-        pred = predict_labels(Q, X)
+        pred = predict_labels(Q, Ga, X)
         correct += pred.eq(target.data).cpu().sum()
 
     return 100. * correct / N
 
-def unsupervised_classification_accuracy(Q, data_loader, n_classes=10):
+def unsupervised_classification_accuracy(Q, Ga, data_loader, n_classes=10):
     N = len(data_loader.dataset)
 
     pred_to_true = {}
@@ -87,7 +89,7 @@ def unsupervised_classification_accuracy(Q, data_loader, n_classes=10):
         if cuda:
             X, y = X.cuda(), y.cuda()
 
-        y_pred = predict_labels(Q, X)
+        y_pred = predict_labels(Q, Ga, X)
 
         for y_true, y_hat in zip(y, y_pred):
             pred_to_true.setdefault(y_hat.item(), {})

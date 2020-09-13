@@ -24,17 +24,17 @@ class GaussianModel(BaseModel):
         self.loc = nn.Parameter(torch.randn(n_classes, z_size), requires_grad=True)
         self.cov_factor = nn.Parameter(torch.randn(n_classes, z_size, 1), requires_grad=True)
         self.cov_diag = nn.Parameter(torch.randn(n_classes, z_size), requires_grad=True)
+        self.mix_weights = nn.Parameter(torch.ones(n_classes), requires_grad=False) # same weights
         self.n_classes = n_classes
         
     def forward(self, batch_size):
         mvn = D.LowRankMultivariateNormal(self.loc, self.cov_factor, torch.functional.F.elu(self.cov_diag) + 1)
-        mix = D.Categorical(torch.ones(self.n_classes)) # same weights
-        gmm = D.MixtureSameFamily(mix, mvn) # mix normal distributions with same weights
+        gmm = D.MixtureSameFamily(D.Categorical(self.mix_weights), mvn) # mix normal distributions
         return gmm.sample(torch.Size([batch_size]))
     
     def get_labels(self, loc):
         mvn = D.LowRankMultivariateNormal(self.loc, self.cov_factor, torch.functional.F.elu(self.cov_diag) + 1)
-        loc = loc.repeat_interleave(self.n_classes, dim=0).reshape(loc.shape[0], n_classes, loc.shape[1])
+        loc = loc.repeat_interleave(self.n_classes, dim=0).reshape(loc.shape[0], self.n_classes, loc.shape[1])
         return F.softmax(torch.exp(mvn.log_prob(loc)), dim=1)
         
 
@@ -53,9 +53,11 @@ class Q_net(BaseModel):
         self.bn1 = nn.BatchNorm1d(hidden_size)
         self.bn2 = nn.BatchNorm1d(hidden_size)
         self.bn_y = nn.BatchNorm1d(n_classes)
-        self.bn_z = nn.BatchNorm1d(z_size)
+        self.bn_z1 = nn.BatchNorm1d(z_size)
+        self.bn_z2 = nn.BatchNorm1d(z_size)
         # gaussian encoding (z)
-        self.lin3_gauss = nn.Linear(hidden_size, z_size*2)
+        self.lin3_class = nn.Linear(hidden_size, z_size)
+        self.lin3_gauss = nn.Linear(hidden_size, z_size)
         # categorical label (y)
         # self.lin3_cat = nn.Linear(hidden_size, n_classes)
 
@@ -64,10 +66,9 @@ class Q_net(BaseModel):
         x = F.relu(self.bn1(x))
         x = self.lin2(x)
         x = F.relu(self.bn2(x))
-        z_gauss = self.bn_z(self.lin3_gauss(x))
-        #y_cat = F.softmax(self.bn_y(self.lin3_cat(x)), dim=1)
-        #return y_cat, z_gauss
-        return z_gauss
+        z_class = self.bn_z1(self.lin3_class(x))
+        z_gauss = self.bn_z2(self.lin3_gauss(x))
+        return z_classs, z_gauss
 
 
 class P_net(BaseModel):
@@ -96,7 +97,7 @@ class D_net(BaseModel):
     Discriminator network.
     '''
     def __init__(self, z_size=2, hidden_size=1000):
-        super(D_net_gauss, self).__init__()
+        super(D_net, self).__init__()
         self.lin1 = nn.Linear(z_size, hidden_size)
         self.lin2 = nn.Linear(hidden_size, hidden_size)
         self.lin3 = nn.Linear(hidden_size, 1)

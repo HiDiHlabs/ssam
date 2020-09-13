@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from ._model import Q_net, P_net, D_net_cat, D_net_gauss
+from ._model import Q_net, P_net, D_net
 from ._train_utils import *
 
 
@@ -240,8 +240,8 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
         hidden_size=model_params['hidden_size'],
         dropout=model_params['encoder_dropout'])
     P = P_net(z_size=z_dim, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
-    D_cat = D_net_cat(n_classes=n_classes, hidden_size=model_params['hidden_size'])
-    D_gauss = D_net_gauss(z_size=z_dim, hidden_size=model_params['hidden_size'])
+    D_cat = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
+    D_gauss = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
 
     # Introducing the new Mode-decoder (it only gets the mode latent y)
     P_mode_decoder = P_net(z_size=0, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
