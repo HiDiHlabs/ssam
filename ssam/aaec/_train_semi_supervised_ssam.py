@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from ._model import Q_net, P_net, GaussianModel, D_net_cat, D_net_gauss
+from ._model import Q_net, P_net, GaussianModel, D_net
 from ._train_utils import *
 
 
@@ -21,11 +21,11 @@ def _train_epoch(
     epsilon = np.finfo(float).eps
 
     # load models and optimizers
-    P, Q, Ga, D_cat, D_gauss = models
+    P, Q, Ga, D_class, D_gauss = models
     auto_encoder_optim, G_optim, D_optim, classifier_optim, centroid_corr_optim = optimizers
 
     # Set the networks in train mode (apply dropout when needed)
-    train_all(P, Q, Ga, D_cat, D_gauss)
+    train_all(P, Q, Ga, D_class, D_gauss)
 
     batch_size = train_labeled_loader.batch_size
 
@@ -47,14 +47,14 @@ def _train_epoch(
                 X, X_noisy, target = X.cuda(), X_noisy.cuda(), target.cuda()
 
             # Init gradients
-            zero_grad_all(P, Q, Ga, D_cat, D_gauss)
+            zero_grad_all(P, Q, Ga, D_class, D_gauss)
 
             if not labeled:
                 #######################
                 # Reconstruction phase
                 #######################
-                latent_vec = torch.cat(Q(X_noisy), 1)
-                X_rec = P(latent_vec)
+                latent_z = Q(X_noisy)
+                X_rec = P(latent_z)
 
                 recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
 
@@ -62,91 +62,90 @@ def _train_epoch(
                 auto_encoder_optim.step()
 
                 # Init gradients
-                zero_grad_all(P, Q, Ga, D_cat, D_gauss)
+                zero_grad_all(P, Q, Ga, D_class, D_gauss)
 
                 #######################
                 # Discriminator phase
                 #######################
                 Q.eval()
-                z_real_cat = sample_categorical(len(X), n_classes=n_classes)
-                #z_real_gauss = Variable(torch.randn(len(X), z_dim))
-                z_real_gauss = Ga(len(X))
+                z_real_class = Ga(len(X))
+                z_real_gauss = Variable(torch.randn(len(X), z_dim))
                 if cuda:
-                    z_real_cat = z_real_cat.cuda()
+                    z_real_class = z_real_class.cuda()
                     z_real_gauss = z_real_gauss.cuda()
 
-                z_fake_cat, z_fake_gauss = Q(X)
+                z_fake = Q(X)
 
-                D_real_cat = D_cat(z_real_cat)
+                D_real_class = D_class(z_real_class)
                 D_real_gauss = D_gauss(z_real_gauss)
-                D_fake_cat = D_cat(z_fake_cat)
-                D_fake_gauss = D_gauss(z_fake_gauss)
+                D_fake_class = D_class(z_fake[:, :z_dim])
+                D_fake_gauss = D_gauss(z_fake[:, z_dim:])
 
-                D_loss_cat = - torch.mean(torch.log(D_real_cat + epsilon) + torch.log(1 - D_fake_cat + epsilon))
+                D_loss_class = - torch.mean(torch.log(D_real_class + epsilon) + torch.log(1 - D_fake_class + epsilon))
                 D_loss_gauss = - torch.mean(torch.log(D_real_gauss + epsilon) + torch.log(1 - D_fake_gauss + epsilon))
 
-                D_loss = D_loss_cat + D_loss_gauss
+                D_loss = D_loss_class + D_loss_gauss
 
                 D_loss.backward()
                 D_optim.step()
 
                 # Init gradients
-                zero_grad_all(P, Q, Ga, D_cat, D_gauss)
+                zero_grad_all(P, Q, Ga, D_class, D_gauss)
                 
                 #######################
                 # Generator phase
                 #######################
                 Q.train()
-                z_fake_cat, z_fake_gauss = Q(X)
+                z_fake = Q(X)
                 
-                D_fake_cat = D_cat(z_fake_cat)
-                D_fake_gauss = D_gauss(z_fake_gauss)
+                D_fake_class = D_class(z_fake[:, :z_dim])
+                D_fake_gauss = D_gauss(z_fake[:, z_dim:])
                 
-                G_loss = - torch.mean(torch.log(D_fake_cat + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon))
+                G_loss = - torch.mean(torch.log(D_fake_class + epsilon)) - torch.mean(torch.log(D_fake_gauss + epsilon))
 
                 G_loss.backward()
                 G_optim.step()
 
                 # Init gradients
-                zero_grad_all(P, Q, Ga, D_cat, D_gauss)
+                zero_grad_all(P, Q, Ga, D_class, D_gauss)
 
                 #######################
                 # Correlation phase
                 #######################
-                latent_y, _ = Q(X)
+                pred = Ga.get_labels(Q(X)[:, :z_dim])
                 c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
                 nom = torch.mm(c_X, centroids)
                 denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
                 
-                centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
+                centroid_corr_loss = ((1 - nom / denom) * pred).sum(dim=1).mean()
                 
                 centroid_corr_loss.backward()
                 centroid_corr_optim.step()
                 
                 # Init gradients
-                zero_grad_all(P, Q, Ga, D_cat, D_gauss)
+                zero_grad_all(P, Q, Ga, D_class, D_gauss)
                 
                 
             #######################
             # Semi-supervised phase
             #######################
             if labeled:
-                pred, _ = Q(X)
+                pred = Ga.get_labels(Q(X)[:, :z_dim])
                 class_loss = F.cross_entropy(pred, target)
                 class_loss.backward()
                 classifier_optim.step()
 
                 # Init gradients
-                zero_grad_all(P, Q, D_cat, D_gauss)
+                zero_grad_all(P, Q, D_class, D_gauss)
 
-    return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss, centroid_corr_loss
+    return D_loss_class, D_loss_gauss, G_loss, recon_loss, class_loss, centroid_corr_loss
 
 
 def _get_optimizers(models, config_dict, decay=1.0):
     '''
     Set and return all relevant optimizers needed for the training process.
     '''
-    P, Q, Ga, D_cat, D_gauss = models
+    P, Q, Ga, D_class, D_gauss = models
 
     # Set learning rates
     learning_rates = config_dict['learning_rates']
@@ -160,7 +159,7 @@ def _get_optimizers(models, config_dict, decay=1.0):
     auto_encoder_optim = optim.Adam(itertools.chain(Q.parameters(), P.parameters()), lr=auto_encoder_lr)
 
     G_optim = optim.Adam(Q.parameters(), lr=generator_lr)
-    D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_cat.parameters(), Ga.parameters()), lr=discriminator_lr)
+    D_optim = optim.Adam(itertools.chain(D_gauss.parameters(), D_class.parameters(), Ga.parameters()), lr=discriminator_lr)
     centroid_corr_optim = optim.Adam(Q.parameters(), lr=generator_lr)
 
     classifier_optim = optim.Adam(Q.parameters(), lr=classifier_lr)
@@ -179,17 +178,17 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     Q = Q_net(z_size=z_dim, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
     P = P_net(z_size=z_dim, n_classes=n_classes, input_size=n_features, hidden_size=model_params['hidden_size'])
     Ga = GaussianModel(z_size=z_dim)
-    D_cat = D_net_cat(n_classes=n_classes, hidden_size=model_params['hidden_size'])
-    D_gauss = D_net_gauss(z_size=z_dim, hidden_size=model_params['hidden_size'])
+    D_class = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
+    D_gauss = D_net(z_size=z_dim, hidden_size=model_params['hidden_size'])
 
     if cuda:
         Q = Q.cuda()
         P = P.cuda()
         Ga = Ga.cuda()
         D_gauss = D_gauss.cuda()
-        D_cat = D_cat.cuda()
+        D_class = D_class.cuda()
 
-    models = P, Q, Ga, D_cat, D_gauss
+    models = P, Q, Ga, D_class, D_gauss
     return models
 
 
@@ -203,7 +202,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
 
     models = _get_models(n_classes, n_features, z_dim, config_dict)
     optimizers = _get_optimizers(models, config_dict)
-    P, Q, Ga, D_cat, D_gauss = models
+    P, Q, Ga, D_class, D_gauss = models
     
     # Calculate label centroids
     centroids = torch.zeros(n_features, n_classes)
@@ -236,7 +235,7 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             report_loss(
                 epoch+1,
                 all_losses,
-                descriptions=['D_loss_cat', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss', 'centroid_correlation_loss'],
+                descriptions=['D_loss_class', 'D_loss_gauss', 'G_loss', 'recon_loss', 'class_loss', 'centroid_correlation_loss'],
                 output_dir=output_dir)
 
             if epoch % 10 == 9:
