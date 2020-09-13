@@ -18,6 +18,16 @@ class BaseModel(nn.Module):
         model.eval()
         return model
 
+class GaussianModel(BaseModel):
+    def __init__(self, z_size=2):
+        super(GaussianModel, self).__init__()
+        self.loc = nn.Parameter(torch.randn(z_size), requires_grad=True)
+        self.cov_factor = nn.Parameter(torch.randn(z_size, 1), requires_grad=True)
+        self.cov_diag = nn.Parameter(torch.randn(z_size), requires_grad=True)
+
+    def forward(self, batch_size):
+        m = torch.distributions.lowrank_multivariate_normal.LowRankMultivariateNormal(self.loc, self.cov_factor, torch.functional.F.elu(self.cov_diag) + 1)
+        return m.sample(torch.Size([batch_size]))
 
 class Q_net(BaseModel):
     '''
