@@ -249,7 +249,7 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalized=True, beta=0, noise=0):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalized=True, beta=0, noise=0, use_centroid_corr_loss=False):
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
@@ -310,7 +310,8 @@ class AAEClassifier:
                 noise=noise,
                 output_dir=None,
                 config_dict=self.config_dict['semi_supervised'],
-                verbose=self.verbose
+                verbose=self.verbose,
+                use_centroid_corr_loss=use_centroid_corr_loss
             )
         self.Q = Q
         self.P = P

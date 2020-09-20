@@ -14,7 +14,7 @@ from ._train_utils import *
 
 
 def _train_epoch(
-    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict, noise):
+    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict, noise, use_centroid_corr_loss):
     '''
     Train procedure for one epoch.
     '''
@@ -54,15 +54,17 @@ def _train_epoch(
                 # Reconstruction phase
                 #######################
                 latent_y, latent_z = Q(X_noisy)
-                
-                c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                nom = torch.mm(c_X, centroids)
-                denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
-                centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
-
                 X_rec = P(torch.cat((latent_y, latent_z, ), 1))
                 
-                recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon) + centroid_corr_loss
+                recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
+                
+                if use_centroid_corr_loss:
+                    c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                    nom = torch.mm(c_X, centroids)
+                    denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                    centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
+                    recon_loss += centroid_corr_loss
+                
                 recon_loss.backward()
                 auto_encoder_optim.step()
 
@@ -179,7 +181,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     return models
 
 
-def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose):
+def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose, use_centroid_corr_loss):
     '''
     Train the full model.
     '''
@@ -214,7 +216,8 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             n_classes,
             z_dim,
             config_dict,
-            noise)
+            noise,
+            use_centroid_corr_loss)
 
         learning_curve.append([float(l) for l in all_losses])
         
