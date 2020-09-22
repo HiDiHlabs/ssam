@@ -39,7 +39,7 @@ from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 from .aaec import AAEClassifier
 
 
-def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwargs):
+def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, plot_model_pars=False, **kwargs):
     """
     Run 'sctransform' R package and returns the normalized matrix and the model parameters.
     Package 'feather' is used for the data exchange between R and Python.
@@ -73,7 +73,10 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             df.to_feather(ifn, version=1)
         else:
             df.to_feather(ifn)
-        rcmd = 'library(arrow); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
+        rcmd = 'library(arrow); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}, return_gene_attr=TRUE, return_cell_attr=TRUE); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
+        if plot_model_pars:
+            plot_path = os.path.join(tmpdirname, 'model_pars.png')
+            rcmd += 'png(file="%s", width=1200, height=400); plot_model_pars(res, show_var=TRUE); dev.off();'%plot_path
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
             f.write(rcmd)
@@ -91,6 +94,22 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, **kwar
             time.sleep(0.0001)
         _log("Reading output files...")
         o, p = pd.read_feather(ofn), pd.read_feather(pfn)
+        if plot_model_pars:
+            try:
+                from matplotlib.image import imread
+                import matplotlib.pyplot as plt
+                img = imread(plot_path)
+                dpi = 80
+                fig = plt.figure(figsize=(img.shape[1]/dpi, img.shape[0]/dpi), dpi=dpi)
+                plt.imshow(img, interpolation='nearest')
+                plt.gca().set_axis_off()
+                plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+                plt.margins(0, 0)
+                plt.gca().xaxis.set_major_locator(plt.NullLocator())
+                plt.gca().yaxis.set_major_locator(plt.NullLocator())
+                plt.show()
+            except:
+                print("Warning: plotting failed, perhaps matplotlib is not available?")
         _log("Clipping residuals...")
         if clip_range is None:
             r = np.sqrt(data.shape[0]/30.0)
