@@ -37,6 +37,7 @@ class SSAMDataset(object):
     def __init__(self, save_dir="", overwrite=False):
         self._vf = None
         self._vf_norm = None
+        self.bandwidth = None
         self._local_maxs = None
         self._selected_vectors = None
         self.normalized_vectors = None
@@ -584,3 +585,30 @@ class SSAMDataset(object):
         rtn = np.zeros_like(self.max_probabilities) - 1
         rtn[self.celltype_maps == idx] = self.max_probabilities[self.celltype_maps == idx]
         return rtn
+    
+    def plot_thresholds(self, n_genes=10, viewport=None, log=True, bins=100, histtype='step'):
+        if viewport is None:
+            viewport = max(self.expression_threshold * 10, self.norm_threshold * 5)
+        
+        gindices = np.arange(len(self.genes))
+        np.random.shuffle(gindices)
+        
+        nrows = 1 + int(np.ceil(n_genes/2))
+        
+        ax = plt.subplot(nrows, 1, 1)
+        ax.hist(self.vf_norm[np.logical_and(self.vf_norm > 0, self.vf_norm < viewport)].compute(), bins=bins, log=log, histtype=histtype)
+        ax.set_xlim([0, viewport])
+        ax.axvline(self.norm_threshold, c='red', ls='--')
+        ax.text(self.norm_threshold + viewport / 50, 0.8, '%.3f'%self.norm_threshold, transform=ax.get_xaxis_transform())
+        ax.set_xlabel("L1-norm")
+        ax.set_ylabel("Count")
+        for i, gidx in enumerate(gindices[:n_genes], start=3):
+            ax = plt.subplot(nrows, 2, i)
+            ax.hist(self.vf[..., gidx][np.logical_and(self.vf[..., gidx] > 0, self.vf[..., gidx] < viewport)].compute(), bins=bins, log=log, histtype=histtype)
+            ax.set_xlim([0, viewport])
+            ax.axvline(self.expression_threshold, c='red', ls='--')
+            ax.text(self.expression_threshold + viewport / 50, 0.8, '%.3f'%self.expression_threshold, transform=ax.get_xaxis_transform())
+            ax.set_title(self.genes[gidx])
+            ax.set_xlabel("Expression")
+            ax.set_ylabel("Count")
+        plt.tight_layout()

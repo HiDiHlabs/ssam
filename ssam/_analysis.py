@@ -9,6 +9,7 @@ import pandas as pd
 
 import multiprocessing
 import sys, os
+import warnings
 
 from sklearn import preprocessing
 import scipy
@@ -118,28 +119,32 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, plot_m
         return o, p
 
 
-class MedoidCorrelation:
-    def __init__(self, min_r=0.8):
-        self.min_r = min_r
-
-    def fit_predict(self, X):
-        X = np.array(X, copy=True)
-        labels = np.ones(X.shape[0], dtype=int)
-        prev_midx = -1
-        while True:
-            vindices = np.where(labels > -1)[0]
-            good_X = X[labels > -1]
-            midx = vindices[np.argmin(np.sum(cdist(good_X, good_X, metric='correlation'), axis=0))]
-            if midx == prev_midx:
-                break
-            prev_midx = midx
-            m = X[midx]
-            for vidx, v in zip(vindices, good_X):
-                if corr(v, m) < self.min_r:
-                    labels[vidx] = -1
-        return labels
-
-
+def remove_outliers(X, cluster_labels, outlier_detection_method='robust-covariance', outlier_detection_kwargs={}, normalize=True):
+    if outlier_detection_method == 'robust-covariance':
+        clf = EllipticEnvelope(**outlier_detection_kwargs)
+    elif outlier_detection_method == 'one-class-svm':
+        clf = OneClassSVM(**outlier_detection_kwargs)
+    elif outlier_detection_method == 'isolation-forest':
+        clf = IsolationForest(**outlier_detection_kwargs)
+    elif outlier_detection_method == 'local-outlier-factor':
+        clf = LocalOutlierFactor(**outlier_detection_kwargs)
+    else:
+        raise NotImplementedError("Method %s is not implemented."%outlier_detection_kwargs['method'])
+    new_labels = np.array(cluster_labels, copy=True)
+    if normalize:
+        X = preprocessing.normalize(X)
+    for cidx in np.unique(cluster_labels):
+        if cidx == -1:
+            continue
+        cluster_indices = np.where(new_labels == cidx)[0]
+        X_cl = X[cluster_indices]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            predicted_labels = clf.fit_predict(X_cl)
+        new_labels[cluster_indices[predicted_labels == -1]] = -1
+    return new_labels
+    
+    
 class SSAMAnalysis(object):
     """
     A class to run SSAM analysis.
@@ -178,12 +183,15 @@ class SSAMAnalysis(object):
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
         zg = zarr.open_group(fn_vf_zarr, mode='o')
+        assert all(zg['kde_computed']), "KDE data is incomplete!"
         self.dataset.genes = list(zg['genes'][:])
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
         self.dataset.shape = self.dataset.vf_norm.shape
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
+        self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
+        self.dataset.norm_threshold = self.dataset.expression_threshold * 2
         
     def migrate_kde(self, genes, bandwidth=2.5, sampling_distance=1.0):
         fn_vf_prefix = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s'%(
@@ -203,6 +211,8 @@ class SSAMAnalysis(object):
         self.dataset.zarr_group = zg
         self.dataset.shape = self.dataset.vf_norm.shape
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
+        self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
+        self.dataset.norm_threshold = self.dataset.expression_threshold * 2
         
     def run_kde(self, genes, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, use_mmap=False, re_run=False):
         """
@@ -236,6 +246,9 @@ class SSAMAnalysis(object):
             zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
             zg.zeros(name='vf', shape=vf_shape, dtype='f4')
 
+        if all(zg['kde_computed']):
+            self._m("Loaded an existing KDE result. If you want to recompute KDE, set re_run=True.")
+            
         if not all(zg['kde_computed']) or re_run:
             if not re_run and any(zg['kde_computed']):
                 self._m("Resuming KDE computation...")
@@ -268,6 +281,8 @@ class SSAMAnalysis(object):
                 zg['kde_computed'][gidx] = True
 
         self.dataset.ndim = 2 if depth == 1 else 3
+        self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
+        self.dataset.norm_threshold = self.dataset.expression_threshold * 2
         self.dataset.genes = list(genes)
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
@@ -288,27 +303,21 @@ class SSAMAnalysis(object):
         self.dataset.corr_map = np.array(corr_map, copy=True)
         return
     
-    def find_localmax(self, search_size=3, min_norm=0, min_expression=0, mask=None):
+    def find_localmax(self, search_size=3, mask=None):
         """
         Find local maxima vectors in the norm of the vector field.
 
         :param search_size: Size of square (or cube in 3D) that is used to search for the local maxima.
             This value should be an odd number.
         :type search_size: int
-        :param min_norm: Minimum value of norm at the local maxima.
-        :type min_norm: float
-        :param min_expression: Minimum value of gene expression in a unit pixel at the local maxima.
-            mask: numpy.ndarray, optional
-            If given, find vectors in the masked region, instead of the whole image.
-        :type min_expression: float
         """
 
         max_mask = self.dataset.vf_norm == ndimage.maximum_filter(self.dataset.vf_norm, size=search_size)
-        max_mask &= self.dataset.vf_norm > min_norm
-        if min_expression > 0:
+        max_mask &= self.dataset.vf_norm > self.dataset.norm_threshold
+        if self.dataset.expression_threshold > 0:
             exp_mask = da.zeros_like(max_mask)
             for i in range(len(self.dataset.genes)):
-                exp_mask |= self.dataset.vf[..., i] > min_expression
+                exp_mask |= self.dataset.vf[..., i] > self.dataset.expression_threshold
             max_mask &= exp_mask
         if mask is not None:
             max_mask &= mask
@@ -337,7 +346,7 @@ class SSAMAnalysis(object):
         if not re_run and 'vf_normalized' in self.dataset.zarr_group and 'normalized_vectors' in self.dataset.zarr_group:
             self.dataset.vf_normalized = da.from_zarr(self.dataset.zarr_group['vf_normalized'])
             self.dataset.normalized_vectors = self.dataset.zarr_group['normalized_vectors'][:]
-            self._m("Loaded a cached normalized vector field (to avoid this behavior, set re_run=True).")
+            self._m("Loaded a precomputed normalized vector field (to avoid this behavior, set re_run=True).")
             return
 
         if 'vf_normalized' in self.dataset.zarr_group:
@@ -445,26 +454,7 @@ class SSAMAnalysis(object):
         return
     
     def _correct_cluster_labels(self, cluster_labels, outlier_detection_method, outlier_detection_kwargs):
-        if outlier_detection_method == 'medoid-correlation':
-            clf = MedoidCorrelation(**outlier_detection_kwargs)
-        elif outlier_detection_method == 'one-class-svm':
-            clf = OneClassSVM(**outlier_detection_kwargs)
-        elif outlier_detection_method == 'robust-covariance':
-            clf = EllipticEnvelope(**outlier_detection_kwargs)
-        elif outlier_detection_method == 'isolation-forest':
-            clf = IsolationForest(**outlier_detection_kwargs)
-        elif outlier_detection_method == 'local-outlier-factor':
-            clf = LocalOutlierFactor(**outlier_detection_kwargs)
-        else:
-            raise NotImplementedError("Method %s is not implemented."%outlier_detection_kwargs['method'])
-        new_labels = np.array(cluster_labels, copy=True)
-        for cidx in np.unique(cluster_labels):
-            if cidx == -1:
-                continue
-            cluster_indices = np.where(new_labels == cidx)[0]
-            X_cl = self.dataset.normalized_vectors[cluster_indices]
-            predicted_labels = clf.fit_predict(X_cl)
-            new_labels[cluster_indices[predicted_labels == -1]] = -1
+        new_labels = remove_outliers(self.dataset.normalized_vectors, cluster_labels, outlier_detection_method, outlier_detection_kwargs)
         return new_labels
 
     def _calc_centroid(self, cluster_labels, normalize=True, norm='l2'):
@@ -487,7 +477,7 @@ class SSAMAnalysis(object):
         return centroids, centroids_stdev#, medoids
 
     def cluster_vectors(self, pca_dims=-1, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
-                        metric="correlation", subclustering=True, dbscan_eps=0.4, outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, random_state=0):
+                        metric="correlation", subclustering=True, dbscan_eps=0.4, outlier_detection_method='robust-covariance', outlier_detection_kwargs={}, random_state=0):
         """
         Cluster the given vectors using the specified clustering method.
 
@@ -565,7 +555,7 @@ class SSAMAnalysis(object):
         else:
             all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
         
-        if outlier_detection_method:
+        if outlier_detection_method is not None:
             new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
         else:
             new_labels = all_lbls
@@ -588,7 +578,7 @@ class SSAMAnalysis(object):
             for i in sorted(removed_indices, reverse=True):
                 all_lbls[all_lbls > i] -= 1
 
-            if outlier_detection_method:
+            if outlier_detection_method is not None:
                 new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
             else:
                 new_labels = all_lbls
@@ -711,7 +701,7 @@ class SSAMAnalysis(object):
         self.dataset.transferred_labels = transferred_labels
         
     
-    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, min_norm=0, epochs=1000, n=1, seed=0, batch_size=1000, max_size=0, chunk_size=100000, z_dim=2, noise=0, normalized=True, use_centroid_corr_loss=False):
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, epochs=1000, n=1, seed=0, batch_size=1000, max_size=0, chunk_size=100000, z_dim=10, noise=0, normalized=True, use_centroid_corr_loss=False):
         # beta: CVPR 2019, Class-Balanced Loss Based on Effective Number of Samples
         if not unsupervised:
             if labels is None:
@@ -733,8 +723,7 @@ class SSAMAnalysis(object):
 
         assert n_celltypes > 0, "The number of cell types has to be more than 0."
         model = AAEClassifier(verbose=self.verbose, random_seed=seed)
-        nonzero_mask = (self.dataset.vf_norm > 0).compute()
-        thresholded_mask = (self.dataset.vf_norm > min_norm).compute()
+        thresholded_mask = (self.dataset.vf_norm > self.dataset.norm_threshold).compute()
         vf_thresholded = self.dataset.vf_normalized[np.ravel(thresholded_mask)]
         
         self._m("Training model...")
@@ -764,6 +753,7 @@ class SSAMAnalysis(object):
                         use_centroid_corr_loss=use_centroid_corr_loss)
         
         self._m("Predicting probabilities...")
+        nonzero_mask = (self.dataset.vf_norm > 0).compute()
         predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
         if not unsupervised:
             predicted_labels = _uniq_labels[predicted_labels]
