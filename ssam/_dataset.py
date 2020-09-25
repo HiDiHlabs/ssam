@@ -234,11 +234,21 @@ class SSAMDataset(object):
         pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
         self.umap = UMAP(metric=metric, random_state=random_state, min_dist=min_dist, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
     
-    def plot_embedding(self, method, s=None, colors=[], excluded_color="#00000033", cmap="jet"):
+    def plot_embedding(self, method, s=None, colors=[], color_excluded="#00000033", cmap="jet"):
         if method == 'umap':
             embedding = self.umap
         elif method == 'tsne':
             embedding = self.tsne
+        
+        if isinstance(colors, str):
+            try:
+                gene_idx = list(self.genes).index(colors)
+            except:
+                raise ValueError("Not found gene with name %s."%colors)
+            if self.filtered_cluster_labels is not None:
+                colors = self.normalized_vectors[self.filtered_cluster_labels != -1][:, gene_idx]
+            else:
+                colors = self.normalized_vectors[:, gene_idx]
             
         if len(colors) == embedding.shape[0]:
             plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors)
@@ -247,7 +257,7 @@ class SSAMDataset(object):
         if self.filtered_cluster_labels is not None:
             cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
         else:
-            cols = None
+            cols = self.cluster_labels
         if len(colors) > 0:
             assert len(colors) == len(self.centroids)
             cmap = ListedColormap(colors)
@@ -256,8 +266,10 @@ class SSAMDataset(object):
             if self.filtered_cluster_labels is not None:
                 excluded_mask = self.filtered_cluster_labels == -1
                 if np.sum(excluded_mask) > 0:
-                    plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=excluded_color)
-            plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
+                    plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=color_excluded)
+                    plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
+            else:
+                plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
         else:
             plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
     
