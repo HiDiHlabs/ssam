@@ -294,7 +294,7 @@ class SSAMAnalysis(object):
                                         prune_coefficient,
                                         0,
                                         self.ncores)
-                data = np.array(data) / ((2 * np.pi * (bandwidth ** 2)) ** (locs.shape[-1] / 2))
+                data = np.array(data) / ((2 * np.pi * (bandwidth ** 2)) ** (locs.shape[-1] / 2)) * sampling_distance ** 2
                 self._m("Saving KDE for gene %s..."%genes[gidx])
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
