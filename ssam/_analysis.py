@@ -565,10 +565,10 @@ class SSAMAnalysis(object):
                         cluster_indices.append(lbls == lbl)
                 for lbl in low_clusters:
                     lbls[lbls == lbl] = -1
-            for i, idx in enumerate(cluster_indices):
-                lbls[idx] = i
-            return lbls
-        
+                for i, idx in enumerate(cluster_indices):
+                    lbls[idx] = i
+                return lbls
+
             if subclustering:
                 super_lbls = cluster_louvain(vecs_normalized_dimreduced)
                 dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)

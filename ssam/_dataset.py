@@ -251,7 +251,7 @@ class SSAMDataset(object):
                 colors = self.normalized_vectors[:, gene_idx]
             
         if len(colors) == embedding.shape[0]:
-            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors)
+            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors, cmap=cmap)
             return
         
         if self.filtered_cluster_labels is not None:
@@ -267,7 +267,7 @@ class SSAMDataset(object):
                 excluded_mask = self.filtered_cluster_labels == -1
                 if np.sum(excluded_mask) > 0:
                     plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=color_excluded)
-                    plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
+                plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
             else:
                 plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
         else:
