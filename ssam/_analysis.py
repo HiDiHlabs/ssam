@@ -77,7 +77,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, plot_m
         rcmd = 'library(arrow); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}, return_gene_attr=TRUE, return_cell_attr=TRUE); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         if plot_model_pars:
             plot_path = os.path.join(tmpdirname, 'model_pars.png')
-            rcmd += 'png(file="%s", width=1200, height=400); plot_model_pars(res, show_var=TRUE); dev.off();'%plot_path
+            rcmd += 'png(file="%s", width=3600, height=1200, res=300); plot_model_pars(res, show_var=TRUE); dev.off();'%plot_path
         rcmd = rcmd.replace('\\', '\\\\')
         with open(rfn, "w") as f:
             f.write(rcmd)
@@ -119,8 +119,32 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, plot_m
         return o, p
 
 
-def remove_outliers(X, cluster_labels, outlier_detection_method='robust-covariance', outlier_detection_kwargs={}, normalize=True):
-    if outlier_detection_method == 'robust-covariance':
+class MedoidCorrelation:
+    def __init__(self, min_r=0.8):
+        self.min_r = min_r
+
+    def fit_predict(self, X):
+        X = np.array(X, copy=True)
+        labels = np.ones(X.shape[0], dtype=int)
+        prev_midx = -1
+        while True:
+            vindices = np.where(labels > -1)[0]
+            good_X = X[labels > -1]
+            midx = vindices[np.argmin(np.sum(cdist(good_X, good_X, metric='correlation'), axis=0))]
+            if midx == prev_midx:
+                break
+            prev_midx = midx
+            m = X[midx]
+            for vidx, v in zip(vindices, good_X):
+                if corr(v, m) < self.min_r:
+                    labels[vidx] = -1
+        return labels
+
+
+def remove_outliers(X, cluster_labels, outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, normalize=True):
+    if outlier_detection_method == 'medoid-correlation':
+        clf = MedoidCorrelation(**outlier_detection_kwargs)
+    elif outlier_detection_method == 'robust-covariance':
         clf = EllipticEnvelope(**outlier_detection_kwargs)
     elif outlier_detection_method == 'one-class-svm':
         clf = OneClassSVM(**outlier_detection_kwargs)
@@ -666,7 +690,7 @@ class SSAMAnalysis(object):
         
         return
 
-    def transfer_labels(self, labeled_data, labels, use_filtered_cluster_labels=False, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='correlation', transfer_options={}):
+    def transfer_labels(self, labeled_data, labels, use_filtered_cluster_labels=True, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='svm', transfer_options={}):
         if normalize:
             X = preprocessing.normalize(labeled_data, norm='l2', axis=1)
         else:
@@ -688,7 +712,14 @@ class SSAMAnalysis(object):
             transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
             max_corrs = np.max(centroid_corrs, axis=1)
             transferred_centroid_labels[max_corrs < min_r] = -1
-            transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int) - 1
+        elif method == 'svm':
+            min_p = transfer_options.get('min_p', 0)
+            from sklearn import svm
+            clf = svm.SVC(probability=True).fit(X, labels)
+            probs = clf.predict_proba(self.dataset.centroids)
+            transferred_centroid_labels = np.argmax(probs, axis=1)
+            if min_p > 0:
+                transferred_centroid_labels[np.max(probs, axis=1) < min_p] = -1
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
             
@@ -696,6 +727,7 @@ class SSAMAnalysis(object):
             cluster_labels = self.dataset.filtered_cluster_labels
         else:
             cluster_labels = self.dataset.cluster_labels
+        transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int) - 1
         for idx, lbl in enumerate(transferred_centroid_labels):
             transferred_labels[cluster_labels == idx] = lbl
         self.dataset.transferred_labels = transferred_labels
