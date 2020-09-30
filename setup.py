@@ -48,8 +48,8 @@ setuptools.setup(
         "pyarrow",
         "pyyaml",
         "dask",
+        "dask[array]",
         "zarr",
-        "zarr[array]",
         "hdbscan",
         "torch",
     ]

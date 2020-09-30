@@ -11,7 +11,7 @@ scikit-image
 pyarrow
 pyyaml
 dask
+dask[array]
 zarr
-zarr[array]
 hdbscan
 torch
