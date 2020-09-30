@@ -19,7 +19,8 @@ from tempfile import TemporaryDirectory
 from sklearn.neighbors import kneighbors_graph
 import community
 import networkx as nx
-from sklearn.cluster import DBSCAN
+from sklearn.cluster import DBSCAN, OPTICS
+import hdbscan
 from skimage import filters
 from skimage.morphology import disk
 from skimage import measure
@@ -500,8 +501,8 @@ class SSAMAnalysis(object):
             centroids_stdev.append(centroid_stdev)
         return centroids, centroids_stdev#, medoids
 
-    def cluster_vectors(self, pca_dims=-1, min_samples=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
-                        metric="correlation", subclustering=True, dbscan_eps=0.4, outlier_detection_method='robust-covariance', outlier_detection_kwargs={}, random_state=0):
+    def cluster_vectors(self, method="louvain", pca_dims=-1, min_samples=0, max_correlation=1.0, metric="correlation",
+                        outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, random_state=0, **kwargs):
         """
         Cluster the given vectors using the specified clustering method.
 
@@ -530,54 +531,72 @@ class SSAMAnalysis(object):
         :type random_state: int or random state object
         """
         
-        vecs_normalized = self.dataset.normalized_vectors
-        if pca_dims < 0:
-            vecs_normalized_dimreduced = np.array(vecs_normalized, copy=True)
-        else:
-            vecs_normalized_dimreduced = PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
+        def get_normalized_vectors():
+            vecs_normalized = self.dataset.normalized_vectors
+            if pca_dims < 0:
+                return vecs_normalized
+            else:
+                return PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
         
-        def cluster_louvain(vecs):
-            k = min(snn_neighbors, vecs.shape[0])
-            knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
-            intersections = np.dot(knn_graph, knn_graph.T)
-            snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
-            snn_graph[snn_graph < prune] = 0
-            G = nx.from_numpy_matrix(snn_graph)
-            partition = community.best_partition(G, resolution=resolution, random_state=random_state)
-            lbls = np.array(list(partition.values()))
-            low_clusters = []
-            cluster_indices = []
-            for lbl in set(list(lbls)):
-                cnt = np.sum(lbls == lbl)
-                if cnt < min_samples:
-                    low_clusters.append(lbl)
-                else:
-                    cluster_indices.append(lbls == lbl)
-            for lbl in low_clusters:
-                lbls[lbls == lbl] = -1
+        if method == 'louvain':
+            vecs_normalized_dimreduced = get_normalized_vectors()
+            resolution = kwargs.get("resolution", 0.6)
+            prune = kwargs.get("prune", 1.0/15.0)
+            snn_neighbors = kwargs.get("snn_neighbors", 30)
+            subclustering = kwargs.get("subclustering", True)
+            dbscan_eps = kwargs.get("dbscan_eps", 0.4)
+        
+            def cluster_louvain(vecs):
+                k = min(snn_neighbors, vecs.shape[0])
+                knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
+                intersections = np.dot(knn_graph, knn_graph.T)
+                snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
+                snn_graph[snn_graph < prune] = 0
+                G = nx.from_numpy_matrix(snn_graph)
+                partition = community.best_partition(G, resolution=resolution, random_state=random_state)
+                lbls = np.array(list(partition.values()))
+                low_clusters = []
+                cluster_indices = []
+                for lbl in set(list(lbls)):
+                    cnt = np.sum(lbls == lbl)
+                    if cnt < min_samples:
+                        low_clusters.append(lbl)
+                    else:
+                        cluster_indices.append(lbls == lbl)
+                for lbl in low_clusters:
+                    lbls[lbls == lbl] = -1
             for i, idx in enumerate(cluster_indices):
                 lbls[idx] = i
             return lbls
         
-        if subclustering:
-            super_lbls = cluster_louvain(vecs_normalized_dimreduced)
-            dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)
-            all_lbls = np.zeros_like(super_lbls)
-            global_lbl_idx = 0
-            for super_lbl in set(list(super_lbls)):
-                super_lbl_idx = np.where(super_lbls == super_lbl)[0]
-                if super_lbl == -1:
-                    all_lbls[super_lbl_idx] = -1
-                    continue
-                sub_lbls = dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_
-                for sub_lbl in set(list(sub_lbls)):
-                    if sub_lbl == -1:
-                        all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = -1
+            if subclustering:
+                super_lbls = cluster_louvain(vecs_normalized_dimreduced)
+                dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)
+                all_lbls = np.zeros_like(super_lbls)
+                global_lbl_idx = 0
+                for super_lbl in set(list(super_lbls)):
+                    super_lbl_idx = np.where(super_lbls == super_lbl)[0]
+                    if super_lbl == -1:
+                        all_lbls[super_lbl_idx] = -1
                         continue
-                    all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = global_lbl_idx
-                    global_lbl_idx += 1
-        else:
-            all_lbls = cluster_louvain(vecs_normalized_dimreduced)            
+                    sub_lbls = dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_
+                    for sub_lbl in set(list(sub_lbls)):
+                        if sub_lbl == -1:
+                            all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = -1
+                            continue
+                        all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = global_lbl_idx
+                        global_lbl_idx += 1
+            else:
+                all_lbls = cluster_louvain(vecs_normalized_dimreduced)
+        elif method == "hdbscan":
+            vecs_normalized_dimreduced = get_normalized_vectors()
+            cl = hdbscan.HDBSCAN(**kwargs)
+            cl.fit(vecs_normalized_dimreduced)
+            all_lbls = np.array(clusterer.labels_, copy=True)
+        elif method == "optics":
+            cl = sklearn.cluster.OPTICS(**kwargs)
+            cl.fit(vecs_normalized_dimreduced)
+            all_lbls = np.array(clusterer.labels_, copy=True)
         
         if outlier_detection_method is not None:
             new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
