@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <queue>
-#include <vector>
+#include <map>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -29,22 +29,67 @@ struct pos3d {
     long y;
     long z;
 };
+bool operator< (pos3d a, pos3d b) { return (a.x == b.x && a.y == b.y)?(a.z < b.z):((a.x == b.x)?(a.y < b.y):(a.x < b.x)); }
+
 
 static double gauss_kernel(double x, double y, double z) {
     return exp(-0.5 * (x*x + y*y + z*z)); // this is not normalized
 }
 
-static void kde(double bandwidth, double *x, double *y, double *z, double* query_x, double* query_y, double *query_z, double *rtn, unsigned int num_points, unsigned int num_querys, double (*kernel)(double, double, double), double maxdist, int ncores) {
-    unsigned int i, j;
-    double d;
-    #pragma omp parallel for num_threads(ncores) private(i, j, d)
-    for (i=0; i<num_querys; i++) {
-        d = 0;
-        for (j=0; j< num_points; j++)
-            if (sqrt((query_x[i] - x[j]) * (query_x[i] - x[j]) + (query_y[i] - y[j]) * (query_y[i] - y[j]) + (query_z[i] - z[j]) * (query_z[i] - z[j])) < maxdist)
-                d += kernel((query_x[i] - x[j])/bandwidth, (query_y[i] - y[j])/bandwidth, (query_z[i] - z[j])/bandwidth);
-        rtn[i] = d; // not normalized
+void kde(std::map<pos3d, double> &arr, double *xx, double *yy, double *zz, int *shape, int npts, double bandwidth, double prune_coeff, int ncores) {
+    int maxdist, xs, xe, ys, ye, zs, ze;
+    double value;
+    std::map<pos3d, double>::iterator it;
+    if (prune_coeff > 0) {
+        maxdist = (int)(bandwidth * prune_coeff);
+    } else {
+        maxdist = -1;
     }
+    omp_lock_t lock;
+    omp_init_lock(&lock);
+    #pragma omp parallel for num_threads(ncores) private(it, value, xs, xe, ys, ye, zs, ze)
+    for (int i=0; i<npts; i++) {
+        int x0 = (int)xx[i];
+        int y0 = (int)yy[i];
+        int z0 = (int)zz[i];
+        if (maxdist > 0) {
+            xs = x0-maxdist;
+            xe = x0+maxdist+1;
+            ys = y0-maxdist;
+            ye = y0+maxdist+1;
+            zs = z0-maxdist;
+            ze = z0+maxdist+1;
+        } else {
+            xs = 0;
+            xe = shape[0];
+            ys = 0;
+            ye = shape[1];
+            zs = 0;
+            ze = shape[2];
+        }
+        for (int x=xs; x<xe; x++) {
+            if (x < 0 || x >= shape[0])
+                continue;
+            for (int y=ys; y<ye; y++) {
+                if (y < 0 || y >= shape[1])
+                    continue;
+                for (int z=zs; z<ze; z++) {
+                    if (z < 0 || z >= shape[2])
+                        continue;
+                    pos3d key{.x = x, .y = y, .z = z};
+                    value = gauss_kernel((x-xx[i])/bandwidth, (y-yy[i])/bandwidth, (z-zz[i])/bandwidth);
+                    omp_set_lock(&lock);
+                    it = arr.find(key);
+                    if (it == arr.end())
+                        arr[key] = value;
+                    else
+                        it->second += value;
+                    omp_unset_lock(&lock);
+                }
+            }
+        }
+    }
+    omp_destroy_lock(&lock);
 }
 
 static double __corr__(double *a, double *b, int ngene) {
@@ -89,71 +134,75 @@ static PyObject *calc_kde(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *arg2 = NULL;
     PyObject *arg3 = NULL;
     PyObject *arg4 = NULL;
-    PyObject *arg5 = NULL;
-    PyObject *arg6 = NULL;
     PyArrayObject *arr1 = NULL;
     PyArrayObject *arr2 = NULL;
     PyArrayObject *arr3 = NULL;
     PyArrayObject *arr4 = NULL;
-    PyArrayObject *arr5 = NULL;
-    PyArrayObject *arr6 = NULL;
-    PyArrayObject *oarr = NULL;
     int ncores = omp_get_max_threads();
-    double *x, *y, *z, *qx, *qy, *qz, *rtn;
-    double h = 2;
-    double maxdist_gauss = -1;
+    PyObject *rtn, *poslist, *xlist, *ylist, *zlist, *vlist;
+    double *x, *y, *z;
+    int *shape;
+    double h, prune_coeff;
     int kernel = 0;
-    unsigned int npts, nqrys;
-    npy_intp nqrys_npy;
-    
-    static const char *kwlist[] = { "h", "x", "y", "z", "q_x", "q_y", "q_z", "kernel", "ncores", NULL };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dOOOOOO|ii", const_cast<char **>(kwlist), &h, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &kernel, &ncores)) return NULL;
+    unsigned int npts;
+    int cnt;
+    std::map<pos3d, double> oarr_map;
+    std::map<pos3d, double>::iterator it;
+
+    static const char *kwlist[] = { "h", "x", "y", "z", "shape", "prune_coeff", "kernel", "ncores", NULL };
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dOOOOd|ii", const_cast<char **>(kwlist), &h, &arg1, &arg2, &arg3, &arg4, &prune_coeff, &kernel, &ncores)) return NULL;
     if ((arr1 = (PyArrayObject*)PyArray_FROM_OTF(arg1, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) return NULL;
     if ((arr2 = (PyArrayObject*)PyArray_FROM_OTF(arg2, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     if ((arr3 = (PyArrayObject*)PyArray_FROM_OTF(arg3, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
-    if ((arr4 = (PyArrayObject*)PyArray_FROM_OTF(arg4, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
-    if ((arr5 = (PyArrayObject*)PyArray_FROM_OTF(arg5, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
-    if ((arr6 = (PyArrayObject*)PyArray_FROM_OTF(arg6, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
+    if ((arr4 = (PyArrayObject*)PyArray_FROM_OTF(arg4, NPY_INT, NPY_ARRAY_IN_ARRAY)) == NULL) goto fail;
     
-    if (PyArray_NDIM(arr1) != 1 || PyArray_NDIM(arr2) != 1 || PyArray_NDIM(arr3) != 1 ||
-        PyArray_NDIM(arr4) != 1 || PyArray_NDIM(arr5) != 1 || PyArray_NDIM(arr6) != 1)
+    if (PyArray_NDIM(arr1) != 1 || PyArray_NDIM(arr2) != 1 || PyArray_NDIM(arr3) != 1 || PyArray_NDIM(arr4) != 1)
     {
         goto fail;
     }
 
     npts = PyArray_DIMS(arr1)[0];
-    nqrys = PyArray_DIMS(arr4)[0];
-    nqrys_npy = nqrys;
-    
-    oarr = (PyArrayObject*)PyArray_ZEROS(1, &nqrys_npy, NPY_DOUBLE, NPY_CORDER);
 
     x = (double *)PyArray_DATA(arr1);
     y = (double *)PyArray_DATA(arr2);
     z = (double *)PyArray_DATA(arr3);
-    qx = (double *)PyArray_DATA(arr4);
-    qy = (double *)PyArray_DATA(arr5);
-    qz = (double *)PyArray_DATA(arr6);
-    rtn = (double *)PyArray_DATA(oarr);
-    
-    maxdist_gauss = sqrt(2) * h * log((double)(1000000 * npts));
-    kde(h, x, y, z, qx, qy, qz, rtn, npts, nqrys, gauss_kernel, maxdist_gauss, ncores);
+    shape = (int *)PyArray_DATA(arr4);
 
+    kde(oarr_map, x, y, z, shape, npts, h, prune_coeff, ncores);
+    rtn = (PyObject *)PyTuple_New(2);
+    poslist = (PyObject *)PyList_New(3);
+    xlist = (PyObject *)PyList_New(oarr_map.size());
+    ylist = (PyObject *)PyList_New(oarr_map.size());
+    zlist = (PyObject *)PyList_New(oarr_map.size());
+    vlist = (PyObject *)PyList_New(oarr_map.size());
+    
+    cnt = 0;
+    for (it = oarr_map.begin(); it != oarr_map.end(); it++)
+    {
+        PyList_SetItem(xlist, cnt, PyLong_FromLong((long)(it->first.x)));
+        PyList_SetItem(ylist, cnt, PyLong_FromLong((long)(it->first.y)));
+        PyList_SetItem(zlist, cnt, PyLong_FromLong((long)(it->first.z)));
+        PyList_SetItem(vlist, cnt, PyFloat_FromDouble(it->second));
+        cnt++;
+    }
+    PyList_SetItem(poslist, 0, xlist);
+    PyList_SetItem(poslist, 1, ylist);
+    PyList_SetItem(poslist, 2, zlist);
+    PyTuple_SetItem(rtn, 0, poslist);
+    PyTuple_SetItem(rtn, 1, vlist);
+    
     Py_DECREF(arr1);
     Py_DECREF(arr2);
     Py_DECREF(arr3);
     Py_DECREF(arr4);
-    Py_DECREF(arr5);
-    Py_DECREF(arr6);
     
-    return (PyObject *) oarr;
+    return (PyObject *) rtn;
     
 fail:
     Py_XDECREF(arr1);
     Py_XDECREF(arr2);
     Py_XDECREF(arr3);
     Py_XDECREF(arr4);
-    Py_XDECREF(arr5);
-    Py_XDECREF(arr6);
     return NULL;
 }
 

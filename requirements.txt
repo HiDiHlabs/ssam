@@ -9,3 +9,7 @@ python-louvain
 sparse
 scikit-image
 pyarrow
+pyyaml
+dask
+zarr
+torch
