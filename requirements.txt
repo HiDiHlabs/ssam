@@ -12,4 +12,6 @@ pyarrow
 pyyaml
 dask
 zarr
+zarr[array]
+hdbscan
 torch

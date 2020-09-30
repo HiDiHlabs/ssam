@@ -49,6 +49,8 @@ setuptools.setup(
         "pyyaml",
         "dask",
         "zarr",
+        "zarr[array]",
+        "hdbscan",
         "torch",
     ]
 )
