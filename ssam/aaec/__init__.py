@@ -38,7 +38,7 @@ def _ctype_async_raise(thread_obj, exception):
 
 
 class _ChunkedDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, shuffle=True, normalized=True, chunk_size=1000, sample_size=0):
+    def __init__(self, vectors, labels=None, shuffle=True, normalized=False, chunk_size=1000, sample_size=0):
         self.vectors = vectors
         if not isinstance(self.vectors, da.core.Array):
             self.vectors = da.array(self.vectors)
@@ -109,17 +109,17 @@ class _ChunkedDataset(torch.utils.data.IterableDataset):
     
     
 class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
-    def __init__(self, vectors, labels=None, normalized=True, chunk_size=100000, max_size=0):
+    def __init__(self, vectors, labels=None, normalized=False, chunk_size=100000, sample_size=0):
         self.vectors = vectors
         if not isinstance(self.vectors, da.core.Array):
             self.vectors = da.array(self.vectors)
         self.labels = labels
         self.normalized = normalized
         self.chunk_size = chunk_size
-        if max_size > 0 and max_size < len(self.vectors):
-            self.max_size = max_size
+        if sample_size > 0 and sample_size < len(self.vectors):
+            self.sample_size = sample_size
         else:
-            self.max_size = len(self.vectors)
+            self.sample_size = len(self.vectors)
         self.proc = None
         self.load_next_chunk_async()
         self._cursor = -1
@@ -142,7 +142,7 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
                     self._cursor = i + 1
                     sample_cnt += 1
                     yield chunk[i], l
-                    if sample_cnt == self.max_size:
+                    if sample_cnt == self.sample_size:
                         return
                 self._cursor = -1
         except KeyboardInterrupt:
@@ -177,11 +177,11 @@ class _ChunkedRandomDataset(torch.utils.data.IterableDataset):
         np.copyto(arr, data)
         
     def __len__(self):
-        return self.max_size
+        return self.sample_size
 
 
 class _Dataset(torch.utils.data.Dataset):
-    def __init__(self, vectors, labels=None, normalized=True):
+    def __init__(self, vectors, labels=None, normalized=False):
         self.labels = labels
         self.vectors = vectors
         if normalized:
@@ -219,14 +219,6 @@ class AAEClassifier:
                     'model': {
                         'hidden_size': 3000,
                         'encoder_dropout': 0.2
-                    },
-                    'training': {
-                        'use_mutual_info': False,
-                        'use_mode_decoder': False,
-                        'use_disentanglement': True,
-                        'use_adam_optimization': True,
-                        'use_adversarial_categorial_weights': False,
-                        'lambda_z_l2_regularization': 0.15
                     }
                 },
                 'semi_supervised': {
@@ -249,20 +241,23 @@ class AAEClassifier:
         with open(path, 'r') as f_cfg:
             self.config_dict = yaml.safe_load(f_cfg)
 
-    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, max_size=0, chunk_size=10000, normalized=True, beta=0, noise=0, use_centroid_corr_loss=False):
+    def train(self, n_classes, unlabeled_data, labeled_data=None, labels=None, epochs=1000, batch_size=1000, z_dim=2, sample_size=0, chunk_size=10000, normalized=False, beta=0, noise=0, use_forget_labels=False):
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.random_seed)
         
         n_genes = unlabeled_data.shape[1]
-        if max_size == 0:
-            max_size = len(unlabeled_data)
+        if sample_size == 0:
+            sample_size = len(unlabeled_data)
         if labeled_data is None:
-            dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
+            if sample_size == 0 or sample_size == len(unlabeled_data):
+                dataset_unlabeled = _ChunkedDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size)
+            else:
+                dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, sample_size=sample_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
-            Q, P, P_mode_decoder, learning_curve = train_unsupervised(
+            Q, P, learning_curve = train_unsupervised(
                 unlabeled,
                 epochs=epochs,
                 n_classes=n_classes,
@@ -273,7 +268,6 @@ class AAEClassifier:
                 config_dict=self.config_dict['unsupervised'],
                 verbose=self.verbose
             )
-            self.P_mode_decoder = P_mode_decoder
         else:
             assert unlabeled_data.shape[1] == labeled_data.shape[1]
             uniq_labels, samples_per_cls = np.unique(labels, return_counts=True)
@@ -285,7 +279,7 @@ class AAEClassifier:
                 labels = labels[labels != -1]
             dataset_labeled = _Dataset(labeled_data, labels, normalized=normalized)
             batch_size = min(batch_size, len(dataset_labeled))
-            max_size = len(dataset_labeled)
+            sample_size = len(dataset_labeled)
             if beta > 0:
                 effective_num = 1.0 - np.power(beta, samples_per_cls)
                 weights = (1.0 - beta) / effective_num
@@ -296,7 +290,7 @@ class AAEClassifier:
                 labeled = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=True)
             valid = torch.utils.data.DataLoader(dataset_labeled, batch_size=batch_size, shuffle=False)
 
-            dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, max_size=max_size)
+            dataset_unlabeled = _ChunkedRandomDataset(unlabeled_data, normalized=normalized, chunk_size=chunk_size, sample_size=sample_size)
             unlabeled = torch.utils.data.DataLoader(dataset_unlabeled, batch_size=batch_size)
             
             Q, P, learning_curve = train_semi_supervised(
@@ -311,17 +305,18 @@ class AAEClassifier:
                 output_dir=None,
                 config_dict=self.config_dict['semi_supervised'],
                 verbose=self.verbose,
-                use_centroid_corr_loss=use_centroid_corr_loss
+                use_forget_labels=use_forget_labels
             )
         self.Q = Q
         self.P = P
         self.learning_curve = learning_curve
 
-    def predict_labels(self, X, n=1, normalized=True, chunk_size=10000):
+    def predict_labels(self, X, n=1, normalized=False, chunk_size=10000):
         if isinstance(X, da.core.Array):
             dask = True
         else:
             dask = False
+            
         labels = np.zeros([0, n], dtype=int)
         max_probs = np.zeros([0, n], dtype=float)
         with torch.no_grad():

@@ -170,7 +170,10 @@ def report_loss(epoch, all_losses, descriptions, output_dir=None):
     base_loss_report = 'Epoch-{}; '.format(epoch)
 
     for loss, desc in zip(all_losses, descriptions):
-        base_loss_report += '{}: {:.4}; '.format(desc, loss.item())
+        if loss is None:
+            base_loss_report += '{}: N/A; '.format(desc)
+        else:
+            base_loss_report += '{}: {:.4}; '.format(desc, loss.item())
 
     if output_dir:
         with open(os.path.join(output_dir, 'loss_report.txt'), 'a') as f_report:

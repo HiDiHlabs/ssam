@@ -230,6 +230,7 @@ class SSAMAnalysis(object):
         with open(fn_vf_old, "rb") as f:
             vf_nparr = pickle.load(f)
             zg['vf'] = vf_nparr
+        zg['kde_computed'] = np.ones(len(genes), dtype=bool)
         self.dataset.genes = genes
         self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
@@ -238,8 +239,17 @@ class SSAMAnalysis(object):
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
         self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
         self.dataset.norm_threshold = self.dataset.expression_threshold * 2
+    
+    def set_thresholds(self, expression_threshold=None, norm_threshold=None):
+        assert expression_threshold is not None or norm_threshold is not None, "Please set one of the thresholds!"
         
-    def run_kde(self, genes, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, use_mmap=False, re_run=False):
+        if expression_threshold is not None:
+            self.dataset.expression_threshold = expression_threshold
+            
+        if norm_threshold is not None:
+            self.dataset.norm_threshold = norm_threshold
+            
+    def run_kde(self, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, re_run=False):
         """
         Run KDE. This method uses precomputed kernels to estimate density of mRNA by default. Set `prune_coefficient` negative to disable this behavior.
         :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
@@ -251,37 +261,58 @@ class SSAMAnalysis(object):
         :type sampling_distance: float
         :param re_run: Recomputes KDE, ignoring all existing precomputed densities in the data directory.
         :type re_run: bool
-        :param use_mmap: Use MMAP to reduce memory usage during analysis. Currently not implemented, this option should be always disabled.
-        :type use_mmap: bool
         """
         if kernel != 'gaussian':
             raise NotImplementedError('Only Gaussian kernel is supported for now.')
         if depth < 1 or width < 1 or height < 1:
             raise ValueError("Invalid image dimension")
-
+        
+        assert locations.index.name == 'gene' or 'gene' in locations, "Format error! Please check whether the column 'gene' exists."
+        if locations.index.name != 'gene':
+            locations = locations.set_index('gene')
+        if depth > 1:
+            assert 'x' in locations and 'y' in locations and 'z' in locations, "Format error! Please check whether the columns 'x', 'y', 'z' exist."
+            locations = locations.reindex(['x', 'y', 'z'], axis=1)
+        else:
+            assert 'x' in locations and 'y' in locations, "Format error! Please check whether the columns 'x', 'y' exist."
+            locations = locations.reindex(['x', 'y'], axis=1)
+        
+        genes = np.unique(locations.index)
         vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(genes)])
         fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
 
         zg = zarr.open_group(fn_vf_zarr, mode='a')
+        
+        if re_run:
+            def check_remove(k):
+                try:
+                    del zg[k]
+                except:
+                    pass
+            check_remove('genes')
+            check_remove('kde_computed')
+            check_remove('vf')
+            check_remove('vf_normalized')
+
         if not 'vf' in zg:
             # This is a newly created file
-            zg.array(name='genes', data=genes) # for storage purpose - not used in this method
+            zg.array(name='genes', data=list(genes)) # for storage purpose - not used in this method
             zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
             zg.zeros(name='vf', shape=vf_shape, dtype='f4')
-
-        if all(zg['kde_computed']):
+        
+        if not re_run and all(zg['kde_computed']):
             self._m("Loaded an existing KDE result. If you want to recompute KDE, set re_run=True.")
             
         if not all(zg['kde_computed']) or re_run:
             if not re_run and any(zg['kde_computed']):
                 self._m("Resuming KDE computation...")
-            for gidx in range(len(genes)):
+            for gidx, (gene, loc) in enumerate(locations.groupby('gene', sort=True)):
                 if not re_run and zg['kde_computed'][gidx]:
                     continue
-                self._m("Running KDE for gene %s..."%genes[gidx])
-                locs = np.array(locations[gidx])
+                self._m("Running KDE for gene %s..."%gene)
+                locs = np.array(loc)
                 kde_shape = tuple(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int))
                 if locs.shape[-1] == 2:
                     loc_z = np.zeros(len(locs[:, 0]))
@@ -296,7 +327,7 @@ class SSAMAnalysis(object):
                                         0,
                                         self.ncores)
                 data = np.array(data) / ((2 * np.pi * (bandwidth ** 2)) ** (locs.shape[-1] / 2)) * sampling_distance ** 2
-                self._m("Saving KDE for gene %s..."%genes[gidx])
+                self._m("Saving KDE for gene %s..."%gene)
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
                 if len(coords) == 0:
@@ -357,7 +388,7 @@ class SSAMAnalysis(object):
         self.dataset.local_maxs = tuple([self.dataset.local_maxs[i][ds_indices] for i in range(3)])
         return
 
-    def normalize_vectors_sctransform(self, vst_kwargs={}, max_chunk_size=1024**3/2, re_run=False):
+    def normalize_vectors_sctransform(self, vst_kwargs={}, max_chunk_size=1024**3/2, scale=False, re_run=False):
         """
         Normalize and regularize vectors using SCtransform
 
@@ -405,13 +436,29 @@ class SSAMAnalysis(object):
             res[nonzero_mask] = res_nonzero
             vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
             
+        if scale:
+            self._m("Scaling data...")
+            #X = da.from_zarr(vf_normalized)[np.ravel(self.dataset.vf_norm > self.dataset.norm_threshold)]
+            #mu = np.mean(X, axis=0).compute()
+            #sigma = np.std(X, axis=0).compute()
+            X = da.from_zarr(vf_normalized)[np.ravel(self.dataset.vf_norm > self.dataset.norm_threshold)].compute()
+            mu = np.mean(X, axis=0)
+            sigma = np.std(X, axis=0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                for i in range(total_chunkcnt):
+                    self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
+                    X = vf_normalized[i*chunk_size:(i+1)*chunk_size]
+                    vf_normalized[i*chunk_size:(i+1)*chunk_size] = np.nan_to_num((X - mu) / sigma)
+                norm_vec = np.nan_to_num((norm_vec - mu) / sigma)
+
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
-    def normalize_vectors(self, normalize_gene=True, normalize_vector=True, normalize_median=False, size_after_normalization=1e4, log_transform=True, scale=False, max_chunk_size=1024**3/2, re_run=False):
+    
+    def normalize_vectors(self, normalize_gene=False, normalize_vector=True, normalize_median=False, size_after_normalization=10, log_transform=True, scale=True, max_chunk_size=1024**3/2, re_run=False):
         """
-        Normalize and regularize vectors
+        Normalize and regularize vectors.
 
         :param normalize_gene: If True, normalize vectors by sum of each gene expression across all vectors.
         :type normalize_gene: bool
@@ -419,7 +466,7 @@ class SSAMAnalysis(object):
         :type normalize_vector: bool
         :param log_transform: If True, vectors are log transformed.
         :type log_transform: bool
-        :param scale: If True, vectors are z-scaled (mean centered and scaled by stdev).
+        :param scale: If True, genes are z-scaled (mean centered and scaled by stdev).
         :type scale: bool
         """
         
@@ -440,8 +487,6 @@ class SSAMAnalysis(object):
                 _vecs = _n(_vecs)
             if log_transform:
                 _vecs = np.log(_vecs + 1)
-            if scale:
-                _vecs = preprocessing.scale(_vecs)
             return _vecs
         
         if not re_run and 'vf_normalized' in self.dataset.zarr_group and 'normalized_vectors' in self.dataset.zarr_group:
@@ -457,7 +502,6 @@ class SSAMAnalysis(object):
         
         self._m("Normalizing vectors...")
         norm_vec = _normalize(self.dataset.selected_vectors)
-        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
         
         self._m("Normalizing vector field...")
         flat_vf = self.dataset.vf.reshape([-1, len(self.dataset.genes)])
@@ -475,8 +519,22 @@ class SSAMAnalysis(object):
             res[nonzero_mask] = _normalize(vecs_nonzero)
             vf_normalized[i*chunk_size:(i+1)*chunk_size] = res
             
+        if scale:
+            self._m("Scaling data...")
+            X = da.from_zarr(vf_normalized)[np.ravel(self.dataset.vf_norm > self.dataset.norm_threshold)]
+            mu = np.mean(X, axis=0).compute()
+            sigma = np.std(X, axis=0).compute()
+            with np.errstate(divide='ignore', invalid='ignore'):
+                for i in range(total_chunkcnt):
+                    self._m("Processing chunk %d (of %d)..."%(i+1, total_chunkcnt))
+                    X = vf_normalized[i*chunk_size:(i+1)*chunk_size]
+                    vf_normalized[i*chunk_size:(i+1)*chunk_size] = np.nan_to_num((X - mu) / sigma)
+            norm_vec = np.nan_to_num((norm_vec - mu) / sigma)
+            
+        self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
+
     
     def _correct_cluster_labels(self, cluster_labels, outlier_detection_method, outlier_detection_kwargs):
         new_labels = remove_outliers(self.dataset.normalized_vectors, cluster_labels, outlier_detection_method, outlier_detection_kwargs)
@@ -501,15 +559,15 @@ class SSAMAnalysis(object):
             centroids_stdev.append(centroid_stdev)
         return centroids, centroids_stdev#, medoids
 
-    def cluster_vectors(self, method="louvain", pca_dims=-1, min_samples=0, max_correlation=1.0, metric="correlation",
+    def cluster_vectors(self, method="louvain", pca_dims=-1, min_cluster_size=2, max_correlation=1.0, metric="correlation",
                         outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, random_state=0, **kwargs):
         """
         Cluster the given vectors using the specified clustering method.
 
         :param pca_dims: Number of principal componants used for clustering.
         :type pca_dims: int
-        :param min_samples: Set minimum cluster size.
-        :type min_samples: int
+        :param min_cluster_size: Set minimum cluster size.
+        :type min_cluster_size: int
         :param resolution: Resolution for Louvain community detection.
         :type resolution: float
         :param prune: Threshold for Jaccard index (weight of SNN network). If it is smaller than prune, it is set to zero.
@@ -538,6 +596,33 @@ class SSAMAnalysis(object):
             else:
                 return PCA(n_components=pca_dims, random_state=random_state).fit_transform(vecs_normalized)
         
+        def remove_small_clusters(lbls, lbls2=None):
+            small_clusters = []
+            cluster_indices = []
+            lbls = np.array(lbls)
+            for lbl in np.unique(lbls):
+                if lbl == -1:
+                    continue
+                cnt = np.sum(lbls == lbl)
+                if cnt < min_cluster_size:
+                    small_clusters.append(lbl)
+                else:
+                    cluster_indices.append(lbl)
+            for lbl in small_clusters:
+                lbls[lbls == lbl] = -1
+            tmp = np.array(lbls, copy=True)
+            for i, idx in enumerate(cluster_indices):
+                lbls[tmp == idx] = i
+            if lbls2 is not None:
+                for lbl in small_clusters:
+                    lbls2[lbls2 == lbl] = -1
+                tmp = np.array(lbls2, copy=True)
+                for i, idx in enumerate(cluster_indices):
+                    lbls2[tmp == idx] = i
+                return lbls, lbls2
+            else:
+                return lbls
+        
         if method == 'louvain':
             vecs_normalized_dimreduced = get_normalized_vectors()
             resolution = kwargs.get("resolution", 0.6)
@@ -545,7 +630,7 @@ class SSAMAnalysis(object):
             snn_neighbors = kwargs.get("snn_neighbors", 30)
             subclustering = kwargs.get("subclustering", True)
             dbscan_eps = kwargs.get("dbscan_eps", 0.4)
-        
+            
             def cluster_louvain(vecs):
                 k = min(snn_neighbors, vecs.shape[0])
                 knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
@@ -555,23 +640,11 @@ class SSAMAnalysis(object):
                 G = nx.from_numpy_matrix(snn_graph)
                 partition = community.best_partition(G, resolution=resolution, random_state=random_state)
                 lbls = np.array(list(partition.values()))
-                low_clusters = []
-                cluster_indices = []
-                for lbl in set(list(lbls)):
-                    cnt = np.sum(lbls == lbl)
-                    if cnt < min_samples:
-                        low_clusters.append(lbl)
-                    else:
-                        cluster_indices.append(lbls == lbl)
-                for lbl in low_clusters:
-                    lbls[lbls == lbl] = -1
-                for i, idx in enumerate(cluster_indices):
-                    lbls[idx] = i
                 return lbls
-
+            
             if subclustering:
                 super_lbls = cluster_louvain(vecs_normalized_dimreduced)
-                dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_samples, metric=metric)
+                dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_cluster_size, metric=metric)
                 all_lbls = np.zeros_like(super_lbls)
                 global_lbl_idx = 0
                 for super_lbl in set(list(super_lbls)):
@@ -588,23 +661,26 @@ class SSAMAnalysis(object):
                         global_lbl_idx += 1
             else:
                 all_lbls = cluster_louvain(vecs_normalized_dimreduced)
+                
         elif method == "hdbscan":
             vecs_normalized_dimreduced = get_normalized_vectors()
             cl = hdbscan.HDBSCAN(**kwargs)
             cl.fit(vecs_normalized_dimreduced)
             all_lbls = np.array(clusterer.labels_, copy=True)
+            
         elif method == "optics":
             cl = sklearn.cluster.OPTICS(**kwargs)
             cl.fit(vecs_normalized_dimreduced)
             all_lbls = np.array(clusterer.labels_, copy=True)
         
         if outlier_detection_method is not None:
-            new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+            filtered_all_lbls = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+            filtered_all_lbls, all_lbls = remove_small_clusters(filtered_all_lbls, all_lbls)
         else:
-            new_labels = all_lbls
-                
-        centroids, centroids_stdev = self._calc_centroid(new_labels)
-
+            filtered_all_lbls = all_lbls = remove_small_clusters(all_lbls)
+        
+        centroids, centroids_stdev = self._calc_centroid(filtered_all_lbls)
+        
         merge_candidates = []
         if max_correlation < 1.0:
             Z = scipy.cluster.hierarchy.linkage(centroids, metric='correlation')
@@ -620,15 +696,16 @@ class SSAMAnalysis(object):
                     removed_indices.append(i)
             for i in sorted(removed_indices, reverse=True):
                 all_lbls[all_lbls > i] -= 1
-
+            
             if outlier_detection_method is not None:
-                new_labels = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+                filtered_all_lbls = self._correct_cluster_labels(all_lbls, outlier_detection_method, outlier_detection_kwargs)
+                filtered_all_lbls, all_lbls = remove_small_clusters(filtered_all_lbls, all_lbls)
             else:
-                new_labels = all_lbls
-            centroids, centroids_stdev = self._calc_centroid(new_labels)
-                
+                filtered_all_lbls = all_lbls = remove_small_clusters(all_lbls)
+            centroids, centroids_stdev = self._calc_centroid(filtered_all_lbls)
+            
         self.dataset.cluster_labels = all_lbls
-        self.dataset.filtered_cluster_labels = new_labels
+        self.dataset.filtered_cluster_labels = filtered_all_lbls
         self.dataset.centroids = np.array(centroids)
         self.dataset.centroids_stdev = np.array(centroids_stdev)
         #self.dataset.medoids = np.array(medoids)
@@ -660,9 +737,8 @@ class SSAMAnalysis(object):
         self.dataset.centroids = np.append(self.dataset.centroids, [rg_centroid], axis=0)
         self.dataset.centroids_stdev = np.append(self.dataset.centroids_stdev, [rg_centroid_stdev], axis=0)
     
-    def exclude_and_merge_clusters(self, exclude=[], merge=[], centroid_correction_threshold=0.8):
+    def exclude_and_merge_clusters(self, exclude=[], merge=[], outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}):
         """
-        DEPRECATED:
         Exclude bad clusters (including the vectors in the clusters), and merge similar clusters for the downstream analysis.
 
         :param exclude: List of cluster indices to be excluded.
@@ -674,7 +750,7 @@ class SSAMAnalysis(object):
         :type centroid_correction_threshold: float
         """
         exclude = list(exclude)
-        merge = np.array(merge)
+        #merge = np.array(merge)
         for centroids in merge:
             centroids = np.unique(centroids)
             for centroid in centroids[1:][::-1]:
@@ -700,7 +776,7 @@ class SSAMAnalysis(object):
             self.dataset.cluster_labels[self.dataset.cluster_labels > centroid] -= 1
         self.dataset.normalized_vectors = self.dataset.normalized_vectors[mask, :]
         
-        new_labels = self._correct_cluster_labels(self.dataset.cluster_labels, centroid_correction_threshold)
+        new_labels = self._correct_cluster_labels(self.dataset.cluster_labels, outlier_detection_method, outlier_detection_kwargs)
         centroids, centroids_stdev = self._calc_centroid(new_labels)
         
         self.dataset.centroids = centroids
@@ -709,11 +785,12 @@ class SSAMAnalysis(object):
         
         return
 
-    def transfer_labels(self, labeled_data, labels, use_filtered_cluster_labels=True, outlier_detection_method=None, outlier_detection_kwargs={}, normalize=True, method='svm', transfer_options={}):
+    def transfer_labels(self, labeled_data, labels, use_filtered_cluster_labels=True, outlier_detection_method=None, outlier_detection_kwargs={}, scale=False, normalize=False, method='correlation', transfer_options={}):
+        X = labeled_data
+        if scale:
+            X = preprocessing.scale(X)
         if normalize:
-            X = preprocessing.normalize(labeled_data, norm='l2', axis=1)
-        else:
-            X = labeled_data
+            X = preprocessing.normalize(X, norm='l2', axis=1)
         if outlier_detection_method is not None:
             labels = self._correct_cluster_labels(labels, outlier_detection_method, outlier_detection_kwargs)
         if method == 'correlation':
@@ -724,21 +801,21 @@ class SSAMAnalysis(object):
             centroids = np.zeros([len(uniq_labels), len(self.dataset.genes)])
             for idx, lbl in enumerate(uniq_labels):
                 centroids[idx] = np.mean(X[labels == lbl], axis=0)
-            centroid_corrs = np.zeros([len(self.dataset.centroids), len(centroids)])
-            for i, ci in enumerate(self.dataset.centroids):
+            centroid_corrs = np.zeros([len(self.dataset.normalized_vectors), len(centroids)])
+            for i, ci in enumerate(self.dataset.normalized_vectors):
                 for j, cj in enumerate(centroids):
                     centroid_corrs[i, j] = corr(ci, cj)
-            transferred_centroid_labels = np.argmax(centroid_corrs, axis=1)
+            transferred_labels = np.argmax(centroid_corrs, axis=1)
             max_corrs = np.max(centroid_corrs, axis=1)
-            transferred_centroid_labels[max_corrs < min_r] = -1
+            transferred_labels[max_corrs < min_r] = -1
         elif method == 'svm':
             min_p = transfer_options.get('min_p', 0)
             from sklearn import svm
             clf = svm.SVC(probability=True).fit(X, labels)
-            probs = clf.predict_proba(self.dataset.centroids)
-            transferred_centroid_labels = np.argmax(probs, axis=1)
+            probs = clf.predict_proba(self.dataset.normalized_vectors)
+            transferred_labels = np.argmax(probs, axis=1)
             if min_p > 0:
-                transferred_centroid_labels[np.max(probs, axis=1) < min_p] = -1
+                transferred_labels[np.max(probs, axis=1) < min_p] = -1
         else:
             raise NotImplementedError("Error: method %s is not available."%method)
             
@@ -746,14 +823,12 @@ class SSAMAnalysis(object):
             cluster_labels = self.dataset.filtered_cluster_labels
         else:
             cluster_labels = self.dataset.cluster_labels
-        transferred_labels = np.zeros(self.dataset.normalized_vectors.shape[0], dtype=int) - 1
-        for idx, lbl in enumerate(transferred_centroid_labels):
-            transferred_labels[cluster_labels == idx] = lbl
+        transferred_labels[cluster_labels == -1] = -1
         self.dataset.transferred_labels = transferred_labels
         
     
-    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0.9999, epochs=1000, n=1, seed=0, batch_size=1000, max_size=0, chunk_size=100000, z_dim=10, noise=0, normalized=True, use_centroid_corr_loss=False):
-        # beta: CVPR 2019, Class-Balanced Loss Based on Effective Number of Samples
+    def map_celltypes_aaec(self, n_celltypes=-1, X=None, labels=None, use_transferred_labels=False, unsupervised=False, beta=0, epochs=1000, n=1, seed=0, batch_size=1000, sample_size=0, chunk_size=100000, z_dim=10, noise=0, normalize=False, use_forget_labels=False):
+        # beta: CVPR 2019, Class-Balanced Loss Based on Effective Number of Samples, Y. Cui et al.
         if not unsupervised:
             if labels is None:
                 if use_transferred_labels:
@@ -773,6 +848,7 @@ class SSAMAnalysis(object):
                 n_celltypes = np.max(_labels_sorted) + 1
 
         assert n_celltypes > 0, "The number of cell types has to be more than 0."
+        
         model = AAEClassifier(verbose=self.verbose, random_seed=seed)
         thresholded_mask = (self.dataset.vf_norm > self.dataset.norm_threshold).compute()
         vf_thresholded = self.dataset.vf_normalized[np.ravel(thresholded_mask)]
@@ -784,10 +860,9 @@ class SSAMAnalysis(object):
                         epochs=epochs,
                         batch_size=batch_size,
                         chunk_size=chunk_size,
-                        max_size=max_size,
-                        beta=beta,
+                        sample_size=sample_size,
                         z_dim=z_dim,
-                        normalized=normalized,
+                        normalized=normalize,
                         noise=noise)
         else:
             model.train(n_celltypes,
@@ -799,13 +874,15 @@ class SSAMAnalysis(object):
                         chunk_size=chunk_size,
                         beta=beta,
                         z_dim=z_dim,
-                        normalized=normalized,
+                        normalized=normalize,
                         noise=noise,
-                        use_centroid_corr_loss=use_centroid_corr_loss)
+                        use_forget_labels=use_forget_labels)
         
         self._m("Predicting probabilities...")
         nonzero_mask = (self.dataset.vf_norm > 0).compute()
-        predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)], n=n)
+        predicted_labels, max_probs = model.predict_labels(self.dataset.vf_normalized[np.ravel(nonzero_mask)],
+                                                           normalized=normalize,
+                                                           n=n)
         if not unsupervised:
             predicted_labels = _uniq_labels[predicted_labels]
         
@@ -872,7 +949,7 @@ class SSAMAnalysis(object):
         
         return
 
-    def filter_celltypemaps(self, min_p=0.6, min_r=0.6, min_norm=0.1, min_blob_area=0, filter_params={}, output_mask=None):
+    def filter_celltypemaps(self, min_p=0.6, min_r=0.6, min_norm=0.1, fill_blobs=True, min_blob_area=0, filter_params={}, output_mask=None):
         """
         Post-filter cell type maps created by `map_celltypes`.
 
@@ -892,15 +969,11 @@ class SSAMAnalysis(object):
         """
 
         if isinstance(min_norm, str):
-            # filter_params dict will be used for kwd params for filter_* functions.
-            # some functions doesn't support param 'offset', therefore temporariliy remove it from here
-            filter_offset = filter_params.pop('offset', 0)
+            _filter_params = filter_params.copy()
+            # _filter_params dict will be used for kwd params for filter_* functions.
+            # some functions doesn't support param 'offset', therefore remove it from here
+            filter_offset = _filter_params.pop('offset', 0)
         
-        if len(self.dataset.celltype_maps.shape) == 4:
-            ctmaps = self.dataset.celltype_maps[..., 0]
-        else:
-            ctmaps = self.dataset.celltype_maps
-        filtered_ctmaps = np.array(ctmaps)
         mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
         
         for cidx in np.unique(ctmaps):
@@ -923,29 +996,46 @@ class SSAMAnalysis(object):
                     if min_norm == "localotsu":
                         max_norm = np.max(im)
                         im /= max_norm
-                        selem = disk(filter_params['radius'])
+                        selem = disk(_filter_params['radius'])
                         min_norm_cut = filters.rank.otsu(im, selem) * max_norm
                     else:
                         filter_func = getattr(filters, "threshold_" + min_norm)
                         if min_norm in ["local", "niblack", "sauvola"]:
-                            min_norm_cut = filter_func(im, **filter_params)
+                            min_norm_cut = filter_func(im, **_filter_params)
                         else:
                             highr_norm = vf_norm_z[ctcorr_mask_z]
                             #sigma = np.std(highr_norm)
                             if len(highr_norm) == 0 or np.max(highr_norm) == np.min(highr_norm):
                                 min_norm_cut = np.max(self.dataset.vf_norm)
                             else:
-                                min_norm_cut = filter_func(highr_norm, **filter_params)
+                                min_norm_cut = filter_func(highr_norm, **_filter_params)
                     min_norm_cut += filter_offset # manually apply filter offset
                     mask[..., z][np.logical_and(vf_norm_z > min_norm_cut, ctcorr_mask_z)] = 1
             else:
                 mask[np.logical_and(self.dataset.vf_norm > min_norm, ctcorr > min_r)] = 1
+                
+            if min_blob_area > 0 or fill_blobs:
+                blob_labels = measure.label(mask, background=0)
+                for bp in measure.regionprops(blob_labels):
+                    if min_blob_area > 0 and bp.filled_area < min_blob_area:
+                        for c in bp.coords:
+                            mask[c[0], c[1], c[2]] = 0 # fill with zeros
+                            #mask[c[0], c[1]] = 0 # fill with zeros
+                        continue
+                    if fill_blobs and bp.area != bp.filled_area:
+                        minx, miny, minz, maxx, maxy, maxz = bp.bbox
+                        mask[minx:maxx, miny:maxy, minz:maxz] |= bp.filled_image
+                        #minr, minc, maxr, maxc = bp.bbox
+                        #mask[minr:maxr, minc:maxc] |= bp.filled_image
+                        
+        if len(self.dataset.celltype_maps.shape) == 4:
+            ctmaps = self.dataset.celltype_maps[..., 0]
+        else:
+            ctmaps = self.dataset.celltype_maps
+        
+        filtered_ctmaps = np.array(ctmaps, copy=True)
         filtered_ctmaps[mask == False] = -1
         
-        if isinstance(min_norm, str):
-            # restore offset param
-            filter_params['offset'] = filter_offset
-
         if output_mask is not None:
             filtered_ctmaps[~output_mask.astype(bool)] = -1
         self.dataset.filtered_celltype_maps = filtered_ctmaps

@@ -14,7 +14,7 @@ from ._train_utils import *
 
 
 def _train_epoch(
-    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict, noise, use_centroid_corr_loss):
+    models, optimizers, centroids, train_labeled_loader, train_unlabeled_loader, n_classes, z_dim, config_dict, noise, train_labels):
     '''
     Train procedure for one epoch.
     '''
@@ -58,12 +58,12 @@ def _train_epoch(
                 
                 recon_loss = F.mse_loss(X_rec + epsilon, X + epsilon)
                 
-                if use_centroid_corr_loss:
-                    c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
-                    nom = torch.mm(c_X, centroids)
-                    denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
-                    centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
-                    recon_loss += centroid_corr_loss
+                #if use_centroid_corr_loss:
+                #    c_X = X - X.mean(dim=1).reshape(X.shape[0], 1)
+                #    nom = torch.mm(c_X, centroids)
+                #    denom = torch.sqrt(torch.sum(c_X ** 2, dim=1)).reshape(-1, 1) * torch.sqrt(torch.sum(centroids ** 2, dim=0)).repeat(c_X.shape[0], 1)
+                #    centroid_corr_loss = ((1 - nom / denom) * latent_y).sum(dim=1).mean()
+                #    recon_loss += centroid_corr_loss
                 
                 recon_loss.backward()
                 auto_encoder_optim.step()
@@ -120,15 +120,17 @@ def _train_epoch(
             #######################
             # Semi-supervised phase
             #######################
-            if labeled:
+            if labeled and train_labels:
                 pred, _ = Q(X)
                 class_loss = F.cross_entropy(pred, target)
-                #class_loss = Q(X, labels=target)
                 class_loss.backward()
                 classifier_optim.step()
 
                 # Init gradients
                 zero_grad_all(P, Q, D_cat, D_gauss)
+            
+            if not train_labels:
+                class_loss = None
 
     return D_loss_cat, D_loss_gauss, G_loss, recon_loss, class_loss
 
@@ -181,7 +183,7 @@ def _get_models(n_classes, n_features, z_dim, config_dict):
     return models
 
 
-def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose, use_centroid_corr_loss):
+def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_classes, n_features, z_dim, noise, output_dir, config_dict, verbose, use_forget_labels):
     '''
     Train the full model.
     '''
@@ -203,9 +205,13 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
     if cuda:
         centroids = centroids.cuda()
 
+    train_labels = True
     for epoch in range(epochs):
         if epoch == 50: # learning rate decay
             optimizers = _get_optimizers(models, config_dict, decay=0.1)
+        
+        if epoch == 500 and use_forget_labels:
+            train_labels = False
 
         all_losses = _train_epoch(
             models,
@@ -217,9 +223,9 @@ def train(train_labeled_loader, train_unlabeled_loader, valid_loader, epochs, n_
             z_dim,
             config_dict,
             noise,
-            use_centroid_corr_loss)
+            train_labels)
 
-        learning_curve.append([float(l) for l in all_losses])
+        learning_curve.append([float(l) if l is not None else None for l in all_losses])
         
         if verbose:
             report_loss(

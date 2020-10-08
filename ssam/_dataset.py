@@ -12,6 +12,7 @@ from umap import UMAP
 from tempfile import mkdtemp
 from matplotlib.colors import ListedColormap
 from sklearn import preprocessing
+import numbers
 from .utils import corr
 
 class SSAMDataset(object):
@@ -234,7 +235,7 @@ class SSAMDataset(object):
         pcs = self._run_pca(exclude_bad_clusters, pca_dims, random_state)
         self.umap = UMAP(metric=metric, random_state=random_state, min_dist=min_dist, **umap_kwargs).fit_transform(pcs[:, :pca_dims])
     
-    def plot_embedding(self, method, s=None, colors=[], color_excluded="#00000033", cmap="jet"):
+    def plot_embedding(self, method, use_transferred_labels=False, s=None, colors=[], color_excluded="#00000033", cmap="jet"):
         if method == 'umap':
             embedding = self.umap
         elif method == 'tsne':
@@ -251,27 +252,38 @@ class SSAMDataset(object):
                 colors = self.normalized_vectors[:, gene_idx]
             
         if len(colors) == embedding.shape[0]:
+            if not isinstance(colors[0], numbers.Real):
+                cmap = None
             plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors, cmap=cmap)
             return
         
-        if self.filtered_cluster_labels is not None:
-            cols = self.filtered_cluster_labels[self.filtered_cluster_labels != -1]
+        if use_transferred_labels:
+            labels = self.transferred_labels
         else:
-            cols = self.cluster_labels
-        if len(colors) > 0:
-            assert len(colors) == len(self.centroids)
-            cmap = ListedColormap(colors)
+            labels = self.cluster_labels
             
-        if embedding.shape[0] == len(self.cluster_labels):
-            if self.filtered_cluster_labels is not None:
-                excluded_mask = self.filtered_cluster_labels == -1
-                if np.sum(excluded_mask) > 0:
-                    plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=color_excluded)
-                plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=cols, cmap=cmap)
+        if self.filtered_cluster_labels is not None:
+            labels = labels[self.filtered_cluster_labels != -1]
+                
+        if len(colors) > 0:
+            if use_transferred_labels:
+                assert len(colors) >= np.max(labels), "Number of colors should be equal or more than the number of transferred labels."
             else:
-                plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
+                assert len(colors) >= len(self.centroids), "Number of colors should be equal or more than the number of clusters."
+            #uniq_labels = np.unique(labels[labels != -1])
+            #cmap = ListedColormap([colors[i] for i in uniq_labels])
+            colors = np.array(colors)[labels]
         else:
-            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=cols, cmap=cmap)
+            cmap = plt.get_cmap(cmap)
+            colors = plt.get_cmap('jet')(labels / np.max(labels))
+            
+        if -1 in labels:
+            excluded_mask = labels == -1
+            if np.sum(excluded_mask) > 0:
+                plt.scatter(embedding[:, 0][excluded_mask], embedding[:, 1][excluded_mask], s=s, c=color_excluded)
+            plt.scatter(embedding[:, 0][~excluded_mask], embedding[:, 1][~excluded_mask], s=s, c=colors[~excluded_mask])
+        else:
+            plt.scatter(embedding[:, 0], embedding[:, 1], s=s, c=colors)
     
     def plot_tsne(self, *args, **kwargs):
         self.plot_embedding('tsne', *args, **kwargs)
@@ -451,7 +463,6 @@ class SSAMDataset(object):
         #p, e = self.centroids[centroid_index], self.centroids_stdev[centroid_index]
         X = self.vf_normalized[np.ravel(self.filtered_celltype_maps == centroid_index)].compute()
         if len(X) > 0:
-            X = preprocessing.normalize(X, norm='l2', axis=1)
             p, e = np.mean(X, axis=0), np.std(X, axis=0)
         else:
             p = e = np.zeros(len(self.genes))
