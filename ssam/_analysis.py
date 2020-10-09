@@ -204,13 +204,13 @@ class SSAMAnalysis(object):
             print(message, flush=True)
             
     def load_kde(self, bandwidth=2.5, sampling_distance=1.0):
-        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
+        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.mdb'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
-        zg = zarr.open_group(fn_vf_zarr, mode='o')
+        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
+        zg = zarr.open_group(store=store, mode='o')
         assert all(zg['kde_computed']), "KDE data is incomplete!"
         self.dataset.genes = list(zg['genes'][:])
-        self.dataset.vf_zarr = zg['vf']
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
         self.dataset.shape = self.dataset.vf_norm.shape
@@ -222,17 +222,21 @@ class SSAMAnalysis(object):
         fn_vf_prefix = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
-        fn_vf_zarr = fn_vf_prefix + ".zarr"
+        fn_vf_zarr = fn_vf_prefix + ".mdb"
         fn_vf_old = fn_vf_prefix + ".pkl"
-        zg = zarr.open_group(fn_vf_zarr, mode='w')
+        store = zarr.LMDBStore(fn_vf_zarr)
+        zg = zarr.open_group(store=store, mode="w")
         zg['genes'] = genes
         zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
         with open(fn_vf_old, "rb") as f:
             vf_nparr = pickle.load(f)
             zg['vf'] = vf_nparr
         zg['kde_computed'] = np.ones(len(genes), dtype=bool)
+        store.close()
+        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
+        zg = zarr.open_group(store=store, mode='o')
         self.dataset.genes = genes
-        self.dataset.vf_zarr = zg['vf']
+        self.dataset.zarr_store = store
         self.dataset.vf = da.from_zarr(zg['vf'])
         self.dataset.zarr_group = zg
         self.dataset.shape = self.dataset.vf_norm.shape
@@ -279,11 +283,12 @@ class SSAMAnalysis(object):
         
         genes = np.unique(locations.index)
         vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(genes)])
-        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.zarr'%(
+        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.mdb'%(
             ('%f' % sampling_distance).rstrip('0').rstrip('.'),
             ('%f' % bandwidth).rstrip('0').rstrip('.')))
 
-        zg = zarr.open_group(fn_vf_zarr, mode='a')
+        store = zarr.LMDBStore(fn_vf_zarr)
+        zg = zarr.open_group(store=store, mode="w")
         
         if re_run:
             def check_remove(k):
@@ -331,10 +336,14 @@ class SSAMAnalysis(object):
                 blosc.set_nthreads(self.ncores)
                 gidx_coords = [gidx] * len(coords[0])
                 if len(coords) == 0:
-                    self._m("Computed density is zero everywhere. Maybe something is wrong?")
+                    self._m("Warning: Thee computed density is zero. Maybe something is wrong?")
                 else:
                     zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
                 zg['kde_computed'][gidx] = True
+                store.flush()
+                
+        store.close()
+        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
 
         self.dataset.ndim = 2 if depth == 1 else 3
         self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
@@ -976,7 +985,7 @@ class SSAMAnalysis(object):
         
         mask = np.zeros(self.dataset.vf_norm.shape, dtype=bool)
         
-        for cidx in np.unique(ctmaps):
+        for cidx in np.unique(self.dataset.celltype_maps):
             if cidx == -1:
                 continue
             if self.dataset.max_probabilities is not None:
@@ -1028,19 +1037,14 @@ class SSAMAnalysis(object):
                         #minr, minc, maxr, maxc = bp.bbox
                         #mask[minr:maxr, minc:maxc] |= bp.filled_image
                         
-        if len(self.dataset.celltype_maps.shape) == 4:
-            ctmaps = self.dataset.celltype_maps[..., 0]
-        else:
-            ctmaps = self.dataset.celltype_maps
-        
-        filtered_ctmaps = np.array(ctmaps, copy=True)
+        filtered_ctmaps = np.array(self.dataset.celltype_maps, copy=True)
         filtered_ctmaps[mask == False] = -1
         
         if output_mask is not None:
             filtered_ctmaps[~output_mask.astype(bool)] = -1
         self.dataset.filtered_celltype_maps = filtered_ctmaps
         
-    def bin_celltypemaps(self, step=10, radius=100):
+    def bin_celltypemaps(self, step=10, radius=100, min_r=0.6):
         """
         Sweep a sphere window along a lattice on the image, and count the number of cell types in each window.
 
@@ -1065,7 +1069,11 @@ class SSAMAnalysis(object):
         ct_centers = np.zeros([len(X), len(Y), len(Z)], dtype=int)
         ct_counts = np.zeros([len(X), len(Y), len(Z), len(self.dataset.centroids)], dtype=int)
 
-        ncelltypes = np.max(self.dataset.filtered_celltype_maps) + 1
+        good_vecs_mask = np.logical_and(self.dataset.vf_norm > self.dataset.norm_threshold, self.dataset.max_correlations > min_r)
+        good_celltype_maps = np.zeros_like(self.dataset.celltype_maps) - 1
+        good_celltype_maps[good_vecs_mask] = self.dataset.celltype_maps[good_vecs_mask]
+        
+        ncelltypes = np.max(good_celltype_maps) + 1
         cnt_matrix = np.zeros([ncelltypes, ncelltypes])
         sphere_mask = make_sphere_mask(radius)
 
@@ -1081,17 +1089,17 @@ class SSAMAnalysis(object):
                             mask_slices[ms_idx] = slice(abs(ms), mask_slices[ms_idx].stop)
                             s[ms_idx] = 0
                     for me_idx, me in enumerate(e):
-                        ctmap_size = self.dataset.filtered_celltype_maps.shape[me_idx]
+                        ctmap_size = good_celltype_maps.shape[me_idx]
                         #ctmap_size = 50
                         if me > ctmap_size:
                             mask_slices[me_idx] = slice(mask_slices[me_idx].start, (radius * 2 + 1) + ctmap_size - me)
                             e[me_idx] = ctmap_size
 
-                    w = self.dataset.filtered_celltype_maps[s[0]:e[0],
-                                                            s[1]:e[1],
-                                                            s[2]:e[2]][sphere_mask[tuple(mask_slices)]] + 1
+                    w = good_celltype_maps[s[0]:e[0],
+                                           s[1]:e[1],
+                                           s[2]:e[2]][sphere_mask[tuple(mask_slices)]] + 1
 
-                    ct_centers[xidx, yidx, zidx] = self.dataset.filtered_celltype_maps[x, y, z]
+                    ct_centers[xidx, yidx, zidx] = good_celltype_maps[x, y, z]
                     ct_counts[xidx, yidx, zidx] = np.bincount(np.ravel(w), minlength=len(self.dataset.centroids) + 1)[1:]
                     
         self.dataset.celltype_binned_centers = ct_centers
