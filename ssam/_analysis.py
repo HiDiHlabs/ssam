@@ -202,50 +202,37 @@ class SSAMAnalysis(object):
     def _m(self, message):
         if self.verbose:
             print(message, flush=True)
-            
-    def load_kde(self, bandwidth=2.5, sampling_distance=1.0):
-        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.mdb'%(
-            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.')))
-        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
-        zg = zarr.open_group(store=store, mode='o')
-        assert all(zg['kde_computed']), "KDE data is incomplete!"
-        self.dataset.genes = list(zg['genes'][:])
-        self.dataset.vf = da.from_zarr(zg['vf'])
-        self.dataset.zarr_group = zg
+    
+    def _load_kde(self):
+        assert all(self.dataset.zarr_group['kde_computed']), "KDE data is incomplete!"
+        self.dataset.genes = list(self.dataset.zarr_group['genes'][:])
+        self.dataset.vf = da.from_zarr(self.dataset.zarr_group['vf'])
+        self.dataset.sampling_distance = self.dataset.zarr_group['vf_params'][0]
+        self.dataset.bandwidth = self.dataset.zarr_group['vf_params'][1]
         self.dataset.shape = self.dataset.vf_norm.shape
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
-        self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
+        self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * self.dataset.bandwidth) ** self.dataset.ndim
         self.dataset.norm_threshold = self.dataset.expression_threshold * 2
         
-    def migrate_kde(self, genes, bandwidth=2.5, sampling_distance=1.0):
-        fn_vf_prefix = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s'%(
-            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.')))
-        fn_vf_zarr = fn_vf_prefix + ".mdb"
-        fn_vf_old = fn_vf_prefix + ".pkl"
-        store = zarr.LMDBStore(fn_vf_zarr)
-        zg = zarr.open_group(store=store, mode="w")
-        zg['genes'] = genes
-        zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
-        with open(fn_vf_old, "rb") as f:
+    def migrate_kde(self, path, genes, bandwidth=2.5, sampling_distance=1.0):
+        assert os.path.exists(path), "Cannot find the path %s!"%path
+        with open(path, "rb") as f:
             vf_nparr = pickle.load(f)
-            zg['vf'] = vf_nparr
-        zg['kde_computed'] = np.ones(len(genes), dtype=bool)
-        store.close()
-        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
-        zg = zarr.open_group(store=store, mode='o')
+        self.dataset.zarr_group['genes'] = genes
+        self.dataset.zarr_group.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
+        self.dataset.zarr_group['vf'] = vf_nparr
+        self.dataset.zarr_group['vf_params'] = np.array([sampling_distance, bandwidth])
+        self.dataset.zarr_group['kde_computed'] = np.ones(len(genes), dtype=bool)
+        self.dataset._try_flush()
         self.dataset.genes = genes
-        self.dataset.zarr_store = store
-        self.dataset.vf = da.from_zarr(zg['vf'])
-        self.dataset.zarr_group = zg
+        self.dataset.vf = da.from_zarr(self.dataset.zarr_group['vf'])
         self.dataset.shape = self.dataset.vf_norm.shape
         self.dataset.ndim = 2 if self.dataset.vf_norm.shape[-1] == 1 else 3
         self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
         self.dataset.norm_threshold = self.dataset.expression_threshold * 2
     
     def set_thresholds(self, expression_threshold=None, norm_threshold=None):
-        assert expression_threshold is not None or norm_threshold is not None, "Please set one of the thresholds!"
+        assert expression_threshold is not None or norm_threshold is not None, "Please set at least one of the thresholds!"
         
         if expression_threshold is not None:
             self.dataset.expression_threshold = expression_threshold
@@ -253,7 +240,7 @@ class SSAMAnalysis(object):
         if norm_threshold is not None:
             self.dataset.norm_threshold = norm_threshold
             
-    def run_kde(self, locations, width, height, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, re_run=False):
+    def run_kde(self, locations=None, width=None, height=None, depth=1, kernel='gaussian', bandwidth=2.5, sampling_distance=1.0, prune_coefficient=4.3, re_run=False):
         """
         Run KDE. This method uses precomputed kernels to estimate density of mRNA by default. Set `prune_coefficient` negative to disable this behavior.
         :param kernel: Kernel for density estimation. Currently only Gaussian kernel is supported.
@@ -266,6 +253,11 @@ class SSAMAnalysis(object):
         :param re_run: Recomputes KDE, ignoring all existing precomputed densities in the data directory.
         :type re_run: bool
         """
+        if not re_run and 'kde_computed' in self.dataset.zarr_group and all(self.dataset.zarr_group['kde_computed']):
+            self._load_kde()
+            self._m("Loaded an existing KDE result. If you want to recompute KDE with new parameters, set re_run=True.")
+            return
+            
         if kernel != 'gaussian':
             raise NotImplementedError('Only Gaussian kernel is supported for now.')
         if depth < 1 or width < 1 or height < 1:
@@ -283,38 +275,31 @@ class SSAMAnalysis(object):
         
         genes = np.unique(locations.index)
         vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(genes)])
-        fn_vf_zarr = os.path.join(self.dataset.save_dir, 'vf_sd%s_bw%s.mdb'%(
-            ('%f' % sampling_distance).rstrip('0').rstrip('.'),
-            ('%f' % bandwidth).rstrip('0').rstrip('.')))
-
-        store = zarr.LMDBStore(fn_vf_zarr)
-        zg = zarr.open_group(store=store, mode="w")
         
         if re_run:
             def check_remove(k):
                 try:
-                    del zg[k]
+                    del self.dataset.zarr_group[k]
                 except:
                     pass
             check_remove('genes')
             check_remove('kde_computed')
             check_remove('vf')
             check_remove('vf_normalized')
+            check_remove('vf_params')
 
-        if not 'vf' in zg:
+        if not 'vf' in self.dataset.zarr_group:
             # This is a newly created file
-            zg.array(name='genes', data=list(genes)) # for storage purpose - not used in this method
-            zg.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
-            zg.zeros(name='vf', shape=vf_shape, dtype='f4')
+            self.dataset.zarr_group.array(name='genes', data=list(genes)) # for storage purpose - not used in this method
+            self.dataset.zarr_group.array(name='vf_params', data=np.array([sampling_distance, bandwidth]))
+            self.dataset.zarr_group.zeros(name='kde_computed', shape=len(genes), dtype='bool') # flags, kde has computed or not
+            self.dataset.zarr_group.zeros(name='vf', shape=vf_shape, dtype='f4')
         
-        if not re_run and all(zg['kde_computed']):
-            self._m("Loaded an existing KDE result. If you want to recompute KDE, set re_run=True.")
-            
-        if not all(zg['kde_computed']) or re_run:
-            if not re_run and any(zg['kde_computed']):
+        if not all(self.dataset.zarr_group['kde_computed']) or re_run:
+            if not re_run and any(self.dataset.zarr_group['kde_computed']) and tuple(self.dataset.zarr_group['vf'].shape) == vf_shape:
                 self._m("Resuming KDE computation...")
             for gidx, (gene, loc) in enumerate(locations.groupby('gene', sort=True)):
-                if not re_run and zg['kde_computed'][gidx]:
+                if not re_run and self.dataset.zarr_group['kde_computed'][gidx]:
                     continue
                 self._m("Running KDE for gene %s..."%gene)
                 locs = np.array(loc)
@@ -338,20 +323,15 @@ class SSAMAnalysis(object):
                 if len(coords) == 0:
                     self._m("Warning: Thee computed density is zero. Maybe something is wrong?")
                 else:
-                    zg['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
-                zg['kde_computed'][gidx] = True
-                store.flush()
+                    self.dataset.zarr_group['vf'].set_coordinate_selection(tuple(list(coords) + [gidx_coords]), data)
+                self.dataset.zarr_group['kde_computed'][gidx] = True
+                self.dataset._try_flush()
                 
-        store.close()
-        store = zarr.LMDBStore(fn_vf_zarr, create=False, readonly=True, lock=False)
-
         self.dataset.ndim = 2 if depth == 1 else 3
         self.dataset.expression_threshold = 1 / (np.sqrt(2 * np.pi) * bandwidth) ** self.dataset.ndim
         self.dataset.norm_threshold = self.dataset.expression_threshold * 2
         self.dataset.genes = list(genes)
-        self.dataset.vf_zarr = zg['vf']
-        self.dataset.vf = da.from_zarr(zg['vf'])
-        self.dataset.zarr_group = zg
+        self.dataset.vf = da.from_zarr(self.dataset.zarr_group['vf'])
         self.dataset.shape = self.dataset.vf_norm.shape
         return
 
@@ -461,6 +441,7 @@ class SSAMAnalysis(object):
                 norm_vec = np.nan_to_num((norm_vec - mu) / sigma)
 
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
+        self.dataset._try_flush()
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
     
@@ -539,8 +520,8 @@ class SSAMAnalysis(object):
                     X = vf_normalized[i*chunk_size:(i+1)*chunk_size]
                     vf_normalized[i*chunk_size:(i+1)*chunk_size] = np.nan_to_num((X - mu) / sigma)
             norm_vec = np.nan_to_num((norm_vec - mu) / sigma)
-            
         self.dataset.normalized_vectors = self.dataset.zarr_group.array(name='normalized_vectors', data=np.array(norm_vec))[:]
+        self.dataset._try_flush()
         self.dataset.vf_normalized = da.from_zarr(vf_normalized)
         return
 
@@ -712,7 +693,10 @@ class SSAMAnalysis(object):
             else:
                 filtered_all_lbls = all_lbls = remove_small_clusters(all_lbls)
             centroids, centroids_stdev = self._calc_centroid(filtered_all_lbls)
-            
+        
+        
+        self.dataset._try_flush()
+        self.dataset.zarr_group['cluster_labels'] = all_lbls
         self.dataset.cluster_labels = all_lbls
         self.dataset.filtered_cluster_labels = filtered_all_lbls
         self.dataset.centroids = np.array(centroids)

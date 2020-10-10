@@ -13,6 +13,9 @@ from tempfile import mkdtemp
 from matplotlib.colors import ListedColormap
 from sklearn import preprocessing
 import numbers
+import zarr
+import dask.array as da
+
 from .utils import corr
 
 class SSAMDataset(object):
@@ -35,7 +38,7 @@ class SSAMDataset(object):
     :type save_dir: str
     """
         
-    def __init__(self, save_dir="", overwrite=False):
+    def __init__(self, store=None):
         self._vf = None
         self._vf_norm = None
         self.bandwidth = None
@@ -51,12 +54,24 @@ class SSAMDataset(object):
         self.excluded_clusters = None
         self.celltype_binned_counts = None
         self.max_probabilities = None
-        if len(save_dir) == 0:
-            save_dir = mkdtemp()
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        self.save_dir = save_dir
+        self.zarr_store, self.zarr_group = self._get_zarr_group(store)
     
+    @staticmethod
+    def _get_zarr_group(store):
+        if store is None:
+            # memory store
+            return None, zarr.group()
+        elif isinstance(store, str):
+            store = zarr.DirectoryStore(store)
+        return store, zarr.open_group(store=store, mode="a")
+    
+    def _try_flush(self):
+        if self.zarr_store is not None:
+            try:
+                self.zarr_store.flush()
+            except:
+                pass
+            
     @property
     def local_maxs(self):
         return self._local_maxs
@@ -90,6 +105,10 @@ class SSAMDataset(object):
     def vf(self, vf):
         self._vf = vf
         self._vf_norm = None
+        try:
+            del self.zarr_group['vf_norm']
+        except:
+            pass
         
     @property
     def vf_norm(self):
@@ -100,7 +119,10 @@ class SSAMDataset(object):
         if self.vf is None:
             return None
         if self._vf_norm is None:
-            self._vf_norm = self.vf.sum(axis=3).persist()
+            self.zarr_group.zeros(name='vf_norm', shape=self.vf.shape[:-1])
+            self.zarr_group['vf_norm'] = self.vf.sum(axis=3).compute()
+            self._try_flush()
+            self._vf_norm = da.from_zarr(self.zarr_group['vf_norm'])
         return self._vf_norm
     
     def plot_l1norm(self, cmap="viridis", rotate=0, z=None):
