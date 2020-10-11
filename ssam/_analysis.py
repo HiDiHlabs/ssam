@@ -950,7 +950,7 @@ class SSAMAnalysis(object):
         max_corr_idx = np.zeros(self.dataset.vf_norm.shape, dtype=int) - 1 # -1 for background
         for cidx, centroid in enumerate(centroids):
             print("Generating cell-type map for centroid #%d..."%cidx)
-            ctmap = self._map_celltype(centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3)
+            ctmap = self._map_celltype(centroid, vf_normalized, exclude_gene_indices=None, chunk_size=chunk_size)
             mask = max_corr < ctmap
             max_corr[mask] = ctmap[mask]
             max_corr_idx[mask] = cidx
