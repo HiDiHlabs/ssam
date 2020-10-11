@@ -203,7 +203,11 @@ class SSAMAnalysis(object):
         if self.verbose:
             print(message, flush=True)
     
+    def load_kde(self):
+        self._load_kde()
+    
     def _load_kde(self):
+        assert 'kde_computed' in self.dataset.zarr_group, "KDE has not been computed!"
         assert all(self.dataset.zarr_group['kde_computed']), "KDE data is incomplete!"
         self.dataset.genes = list(self.dataset.zarr_group['genes'][:])
         self.dataset.vf = da.from_zarr(self.dataset.zarr_group['vf'])
@@ -216,6 +220,18 @@ class SSAMAnalysis(object):
         
     def migrate_kde(self, path, genes, bandwidth=2.5, sampling_distance=1.0):
         assert os.path.exists(path), "Cannot find the path %s!"%path
+        
+        def check_remove(k):
+            try:
+                del self.dataset.zarr_group[k]
+            except:
+                pass
+        check_remove('genes')
+        check_remove('kde_computed')
+        check_remove('vf')
+        check_remove('vf_normalized')
+        check_remove('vf_params')
+        
         with open(path, "rb") as f:
             vf_nparr = pickle.load(f)
         self.dataset.zarr_group['genes'] = genes
@@ -276,6 +292,10 @@ class SSAMAnalysis(object):
         genes = np.unique(locations.index)
         vf_shape = tuple(list(np.ceil(np.array([width, height, depth])/sampling_distance).astype(int)) + [len(genes)])
         
+        if 'vf' in self.dataset.zarr_group and any([a != b for a, b in zip(self.dataset.zarr_group['vf'].shape, vf_shape)]):
+            # If KDE is incomplete and the shapes mismatch, set re_run True
+            re_run = True
+            
         if re_run:
             def check_remove(k):
                 try:
@@ -296,7 +316,7 @@ class SSAMAnalysis(object):
             self.dataset.zarr_group.zeros(name='vf', shape=vf_shape, dtype='f4')
         
         if not all(self.dataset.zarr_group['kde_computed']) or re_run:
-            if not re_run and any(self.dataset.zarr_group['kde_computed']) and tuple(self.dataset.zarr_group['vf'].shape) == vf_shape:
+            if not re_run and any(self.dataset.zarr_group['kde_computed']):
                 self._m("Resuming KDE computation...")
             for gidx, (gene, loc) in enumerate(locations.groupby('gene', sort=True)):
                 if not re_run and self.dataset.zarr_group['kde_computed'][gidx]:
@@ -892,6 +912,7 @@ class SSAMAnalysis(object):
             
         self.dataset.aaec_model = model
         self.dataset.max_probabilities = max_probs_map
+        self.dataset.max_correlations = None
         self.dataset.celltype_maps = ctmaps
     
     def _map_celltype(self, centroid, vf_normalized, exclude_gene_indices=None, chunk_size=1024**3):
