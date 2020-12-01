@@ -22,6 +22,7 @@ from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 import community
 import networkx as nx
+from sklearn.cluster import DBSCAN
 import sparse
 from skimage import filters
 from skimage.morphology import disk
@@ -518,9 +519,9 @@ class SSAMDataset(object):
         self.plot_l1norm(rotate=rotate, cmap="Greys", z=z)
 
         ax = plt.subplot(1, 4, 2)
-        ctmap = np.zeros([self.filtered_celltype_maps.shape[1], self.filtered_celltype_maps.shape[0], 4])
-        ctmap[self.filtered_celltype_maps[..., z].T == centroid_index] = to_rgba(cluster_color)
-        ctmap[np.logical_and(self.filtered_celltype_maps[..., z].T != centroid_index, self.filtered_celltype_maps[..., 0].T > -1)] = [0.9, 0.9, 0.9, 1]
+        ctmap = np.zeros([self.filtered_celltype_maps.shape[0], self.filtered_celltype_maps.shape[1], 4])
+        ctmap[self.filtered_celltype_maps[..., z] == centroid_index] = to_rgba(cluster_color)
+        ctmap[np.logical_and(self.filtered_celltype_maps[..., z] != centroid_index, self.filtered_celltype_maps[..., 0] > -1)] = [0.9, 0.9, 0.9, 1]
         if rotate == 1 or rotate == 3:
             ctmap = ctmap.swapaxes(0, 1)
         ax.imshow(ctmap)
@@ -1041,7 +1042,7 @@ class SSAMAnalysis(object):
         return centroids, centroids_stdev#, medoids
 
     def cluster_vectors(self, pca_dims=10, min_cluster_size=0, resolution=0.6, prune=1.0/15.0, snn_neighbors=30, max_correlation=1.0,
-                        metric="correlation", subclustering=False, centroid_correction_threshold=0.8, random_state=0):
+                        metric="correlation", subclustering=False, dbscan_eps=0.4, centroid_correction_threshold=0.8, random_state=0):
         """
         Cluster the given vectors using the specified clustering method.
 
@@ -1059,7 +1060,7 @@ class SSAMAnalysis(object):
         :type max_correlation: bool
         :param metric: Metric for calculation of distance between vectors in gene expression space.
         :type metric: str
-        :param subclustering: If True, each cluster will be clustered once again with the same method to find more subclusters.
+        :param subclustering: If True, each cluster will be clustered once again with DBSCAN algorithm to find more subclusters.
         :type subclustering: bool
         :param centroid_correction_threshold: Centroid will be recalculated with the vectors
             which have the correlation to the cluster medoid equal or higher than this value.
@@ -1074,34 +1075,44 @@ class SSAMAnalysis(object):
         def cluster_vecs(vecs):
             k = min(snn_neighbors, vecs.shape[0])
             knn_graph = kneighbors_graph(vecs, k, mode='connectivity', include_self=True, metric=metric).todense()
-            #snn_graph = (knn_graph + knn_graph.T == 2).astype(int)
             intersections = np.dot(knn_graph, knn_graph.T)
-            #unions = np.zeros_like(intersections)
-            #for i in range(knn_graph.shape[0]):
-            #    for j in range(knn_graph.shape[1]):
-            #        unions[i, j] = np.sum(np.logical_or(knn_graph[i, :], knn_graph[j, :]))
-            #snn_graph = intersections / unions
             snn_graph = intersections / (k + (k - intersections)) # borrowed from Seurat
             snn_graph[snn_graph < prune] = 0
             G = nx.from_numpy_matrix(snn_graph)
             partition = community.best_partition(G, resolution=resolution, random_state=random_state)
             lbls = np.array(list(partition.values()))
-            low_clusters = []
+            return lbls
+
+        def remove_small_clusters(lbls, lbls2=None):
+            small_clusters = []
             cluster_indices = []
-            for lbl in set(list(lbls)):
+            lbls = np.array(lbls)
+            for lbl in np.unique(lbls):
+                if lbl == -1:
+                    continue
                 cnt = np.sum(lbls == lbl)
                 if cnt < min_cluster_size:
-                    low_clusters.append(lbl)
+                    small_clusters.append(lbl)
                 else:
-                    cluster_indices.append(lbls == lbl)
-            for lbl in low_clusters:
+                    cluster_indices.append(lbl)
+            for lbl in small_clusters:
                 lbls[lbls == lbl] = -1
+            tmp = np.array(lbls, copy=True)
             for i, idx in enumerate(cluster_indices):
-                lbls[idx] = i
-            return lbls
+                lbls[tmp == idx] = i
+            if lbls2 is not None:
+                for lbl in small_clusters:
+                    lbls2[lbls2 == lbl] = -1
+                tmp = np.array(lbls2, copy=True)
+                for i, idx in enumerate(cluster_indices):
+                    lbls2[tmp == idx] = i
+                return lbls, lbls2
+            else:
+                return lbls
         
         if subclustering:
             super_lbls = cluster_vecs(vecs_normalized_dimreduced)
+            dbscan = DBSCAN(eps=dbscan_eps, min_samples=min_cluster_size, metric=metric)
             all_lbls = np.zeros_like(super_lbls)
             global_lbl_idx = 0
             for super_lbl in set(list(super_lbls)):
@@ -1109,17 +1120,18 @@ class SSAMAnalysis(object):
                 if super_lbl == -1:
                     all_lbls[super_lbl_idx] = -1
                     continue
-                sub_lbls = cluster_vecs(vecs_normalized_dimreduced[super_lbl_idx])
+                sub_lbls = dbscan.fit(vecs_normalized_dimreduced[super_lbl_idx]).labels_
                 for sub_lbl in set(list(sub_lbls)):
                     if sub_lbl == -1:
-                        all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = -1
+                        all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = -1
                         continue
-                    all_lbls[[super_lbl_idx[sub_lbls == sub_lbl]]] = global_lbl_idx
+                    all_lbls[tuple([super_lbl_idx[sub_lbls == sub_lbl]])] = global_lbl_idx
                     global_lbl_idx += 1
         else:
             all_lbls = cluster_vecs(vecs_normalized_dimreduced)            
                 
         new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
+        new_labels, all_lbls = remove_small_clusters(new_labels, all_lbls)
         centroids, centroids_stdev = self.__calc_centroid(new_labels)
 
         merge_candidates = []
@@ -1139,6 +1151,7 @@ class SSAMAnalysis(object):
                 all_lbls[all_lbls > i] -= 1
 
             new_labels = self.__correct_cluster_labels(all_lbls, centroid_correction_threshold)
+            new_labels, all_lbls = remove_small_clusters(new_labels, all_lbls)
             centroids, centroids_stdev = self.__calc_centroid(new_labels)
                 
         self.dataset.cluster_labels = all_lbls
