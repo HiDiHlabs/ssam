@@ -124,8 +124,7 @@ Creating the tissue domain map
    ds.plot_domains(rotate=1, cmap=cmap)
 
 .. figure:: ../images/domains.png
-   :alt: Visualisation of final domain map exhibitin clearly separated
-   domains.
+   :alt: Visualisation of final domain map exhibitin clearly separated domains.
 
    Visualisation of final domain map exhibitin clearly separated
    domains.
