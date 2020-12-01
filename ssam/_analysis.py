@@ -1300,6 +1300,7 @@ class SSAMAnalysis(object):
         for idx, cl in enumerate(denovo_labels_final):
             m = np.logical_and(self.dataset.celltype_maps == list(denovo_labels_final).index(cl), self.dataset.max_correlations > 0.6, vn > self.dataset.norm_threshold)
             
+            # https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_watershed/py_watershed.html
             thresh = np.zeros_like(dapi_thresh_im, dtype=np.uint8)
             thresh[m] = dapi_thresh_im[m]
             thresh = thresh[..., 0]
