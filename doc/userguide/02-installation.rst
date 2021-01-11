@@ -49,7 +49,7 @@ Finally we switch to pip:
 
 ::
 
-   pip install git+https://github.com/eilslabs/ssam.git
+   pip install git+https://github.com/HiDiHlabs/ssam.git
 
 Next we can download and prepare our `data <data.md>`__.
 
@@ -57,4 +57,4 @@ SSAM’s source code
 ------------------
 
 In case you want to work with `SSAM’s source
-code <https://github.com/eilslabs/ssam>`__, it is also hosted on github.
+code <https://github.com/HiDiHlabs/ssam>`__, it is also hosted on github.
