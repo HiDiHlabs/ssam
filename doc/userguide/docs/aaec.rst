@@ -28,3 +28,5 @@ with :
 
    analysis.map_celltypes_aaec(epochs=1000, seed=0, batch_size=1000, chunk_size=100000, z_dim=10, noise=0)
 
+When using the AAEC, the ``analysis.filter_celltypemaps()`` step should
+*not* be performed.

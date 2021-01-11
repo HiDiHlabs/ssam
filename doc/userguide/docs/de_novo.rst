@@ -25,23 +25,10 @@ principle components, a resolution of 0.15.
 ::
 
    analysis.cluster_vectors(
-       method="louvain", 
        min_cluster_size=0,
        pca_dims=22,
        resolution=0.15,
        metric='correlation')
-
-Remove outliers
----------------
-
-In order to improve the representation of the cluster centroid for the
-entire cluster we `filter local maxima
-outliers <clustering.md#removing-outliers>`__ of the clusters when they
-have lower than 0.6 correlation to the cluster medoid:
-
-::
-
-   analysis.filter_celltypemaps(min_norm=filter_method, filter_params=filter_params, min_r=0.6, output_mask=output_mask)
 
 Cluster annotation and diagnostics
 ----------------------------------
@@ -61,8 +48,12 @@ t-SNE plot:
 
    plt.figure(figsize=[5, 5])
    ds.plot_tsne(pca_dims=22, metric="correlation", s=5, run_tsne=True)
+   plt.savefig('images/tsne.png')
 
-|image0|
+.. figure:: ../images/tsne.png
+   :alt: plot of t-SNE embedding of cell types
+
+   plot of t-SNE embedding of cell types
 
 Cell type map
 -------------
@@ -70,15 +61,33 @@ Cell type map
 Once the clusters have been evaluated for quality, we can generate the
 *de novo* cell-type map. This involves `classifying all the pixels in
 the tissue image based on a correlation
-threshold <celltype_map_thresh_d.md>`__, which in this case is ``0.6``:
+threshold <celltype_map_thresh_d.md>`__. For the *de novo* application
+``0.6`` was found to perform well:
 
 ::
 
    analysis.map_celltypes()
-   analysis.filter_celltypemaps(min_norm=filter_method, filter_params=filter_params, min_r=0.6, fill_blobs=True, min_blob_area=50, output_mask=output_mask)
 
-|image1|
+   filter_params = {
+       "block_size": 151,
+       "method": "mean",
+       "mode": "constant",
+       "offset": 0.2
+       }
+       
+   analysis.filter_celltypemaps(min_norm="local", filter_params=filter_params, min_r=0.6, fill_blobs=True, min_blob_area=50, output_mask=output_mask)
 
-.. |image0| image:: ../images/tsne.png
-.. |image1| image:: ../images/de_novo.png
+::
 
+   plt.figure(figsize=[5, 5])
+   ds.plot_celltypes_map(rotate=1, set_alpha=False)
+   plt.axis('off')
+   plt.savefig('images/de_novo.png')
+
+.. figure:: ../images/de_novo.png
+   :alt: plot of the de novo generated celltype map
+
+   plot of the de novo generated celltype map
+
+We can now use our celltype map to infer a map of `tissue
+domains <domain.md>`__.

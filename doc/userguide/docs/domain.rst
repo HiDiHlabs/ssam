@@ -52,21 +52,31 @@ evaluation.
    from matplotlib.colors import ListedColormap
    cmap_jet = plt.get_cmap('jet')
    num_domains = np.max(ds.inferred_domains_cells) + 1
+
+   fig, axs = plt.subplots(1, num_domains, figsize=(4*num_domains, 4))
    for domain_idx in range(num_domains):
-       plt.figure(figsize=[5, 5])
+       ax = axs[domain_idx]
+       plt.sca(ax)
+       plt.axis('off')
        cmap = ListedColormap([cmap_jet(lbl_idx / num_domains) if domain_idx == lbl_idx else "#cccccc" for lbl_idx in range(num_domains)])
        ds.plot_domains(rotate=1, cmap=cmap)
+   plt.tight_layout()    
+   plt.savefig(f'plots/domains_individual')
 
-|image0|
+.. figure:: ../images/domains_individual.png
+   :alt: side by side plot of all tissue domains
+
+   side by side plot of all tissue domains
 
 Post-processing the identified domains
 --------------------------------------
 
 In certain cases, one may wish to **exclude certain domains**
 (``excluded_domain_indices``) as they may originate from tissue
-artifacts or contain no information. In the case of the above, domain
-number 8 (which is the 7th index, as it the numbering starts from 0!)
-contains no information, so it can be removed.
+artifacts or contain no information. In our case the third domain (0
+based index 2) seems to be an artifact and the fourth one contains no
+useful information. The First two domains are obviously part of the same
+layer and can therefore be merged.
 
 Due to possible imaging artifacts such as tiling, some domains might be
 split. While it is still possible to tune the ``merge_thres`` in the
@@ -79,8 +89,8 @@ be excluded and removed(!):
 
 ::
 
-   excluded_domain_indices = [7]
-   merged_domain_indices = []
+   excluded_domain_indices = [2,3,7,10]
+   merged_domain_indices = [[0,1],[9,11]]
    analysis.exclude_and_merge_domains(excluded_domain_indices, merged_domain_indices)
 
 The final plot
@@ -92,39 +102,10 @@ colours, names, and plotting all of the domains together.
 
 ::
 
-   # Define domain colors
-
-   domain_colors = {
-       'Pia': '#D44218',
-       'Layer 1/2/3': '#85D7E4',
-       'Layer 4': '#F6B813',
-       'Layer 4/5': '#4900B9',
-       'Layer 5a': '#BA55D3',
-       'Layer 5b': '#C6271B',
-       'Layer 6': '#4987B9',
-   }
-
-   # Define domain labels
-
-   domain_labels = [
-       'Layer 1/2/3',
-       'Pia',
-       'Layer 4',
-       'Layer 4/5',
-       'Layer 5a',
-       'Layer 5b',
-       'Layer 6',
-   ]
-
-   # Make the plot
-
-   from matplotlib.colors import ListedColormap
    plt.figure(figsize=[5, 5])
-   cmap = ListedColormap([domain_colors[lbl] for lbl in domain_labels])
-   ds.plot_domains(rotate=1, cmap=cmap)
+   ds.plot_domains(rotate=1)
 
-|image1|
+|image0|
 
-.. |image0| image:: ../images/domains_individual.png
-.. |image1| image:: ../images/domains.png
+.. |image0| image:: ../images/final.png
 
