@@ -157,7 +157,7 @@ annotate, remove, and merge clusters.
 
    analysis.exclude_and_merge_clusters(exclude_indices, merge_indices, centroid_correction_threshold=0.6)
 
-.. |image0| image:: https://github.com/HiDiHlabs/ssam_example/raw/master/diagplots_multiplexed_smFISH/diagplot_centroid_2.png
+.. |image0| image:: ../images/diagplot_centroid_2.png
 .. |image1| image:: ../images/tsne_removed.png
 .. |image2| image:: ../images/tsne_merged.png
 
