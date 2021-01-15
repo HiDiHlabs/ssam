@@ -671,15 +671,16 @@ class SSAMAnalysis(object):
                         global_lbl_idx += 1
             else:
                 all_lbls = cluster_louvain(vecs_normalized_dimreduced)
-                
-        elif method == "hdbscan":
+        elif method in ["dbscan", "hdbscan", "optics"]:
             vecs_normalized_dimreduced = get_normalized_vectors()
-            cl = hdbscan.HDBSCAN(**kwargs)
-            cl.fit(vecs_normalized_dimreduced)
-            all_lbls = np.array(clusterer.labels_, copy=True)
-            
-        elif method == "optics":
-            cl = sklearn.cluster.OPTICS(**kwargs)
+            if method == "dbscan":
+                cl = DBSCAN(**kwargs)
+            elif method == "hdbscan"
+                cl = hdbscan.HDBSCAN(**kwargs)
+            elif method == "optics":
+                cl = OPTICS(**kwargs)
+            else:
+                raise NotImplementedError("Unknown method %s."%method)
             cl.fit(vecs_normalized_dimreduced)
             all_lbls = np.array(clusterer.labels_, copy=True)
         
