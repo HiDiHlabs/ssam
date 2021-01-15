@@ -27,7 +27,7 @@ Now we use conda to install some dependencies into our ssam environment:
 
 ::
 
-   conda install gxx_linux-64 numpy pip R=3.6 pyarrow=0.15.1
+   conda install gxx_linux-64=7.3.0 numpy=1.19.2 pip R=3.6 pyarrow=0.15.1
 
 Now we can install the R packages ``sctransform`` and ``feather``. Open
 R and type:
@@ -39,9 +39,17 @@ R and type:
 
 Finally we switch to pip:
 
+.. raw:: html
+
+   <!--
+   ```
+   pip install ssam
+   ```
+   -->
+
 ::
 
-   pip install ssam
+   pip install git+https://github.com/HiDiHlabs/ssam.git
 
 Next we can download and prepare our `data <data.md>`__.
 
@@ -49,4 +57,4 @@ SSAM’s source code
 ------------------
 
 In case you want to work with `SSAM’s source
-code <https://github.com/eilslabs/ssam>`__, it is also hosted on github.
+code <https://github.com/HiDiHlabs/ssam>`__, it is also hosted on github.

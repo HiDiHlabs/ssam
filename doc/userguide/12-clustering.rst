@@ -22,7 +22,7 @@ It can be initiated by:
                             random_state=0, 
                             **kwargs)
 
-... where - ``method`` can be ``louvain``, ``hdbscan``, ``optics``. -
+… where - ``method`` can be ``louvain``, ``hdbscan``, ``optics``. -
 ``pca_dims`` are the number of principal componants used for clustering.
 - ``min_cluster_size`` is the minimum cluster size. - ``resolution`` is
 the resolution for Louvain community detection. - ``prune`` is the
@@ -52,7 +52,7 @@ removal methods:
 
    analysis.remove_outliers(outlier_detection_method='medoid-correlation', outlier_detection_kwargs={}, normalize=True)
 
-... where - ``outlier_detection_method`` can be ``medoid-correlation``,
+.. where - ``outlier_detection_method`` can be ``medoid-correlation``,
 ``robust-covariance``, ``one-class-svm``, ``isolation-forest``,
 ``local-outlier-factor`` - ``outlier_detection_kwargs`` are arguments
 passed to the outlier detection method

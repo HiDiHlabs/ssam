@@ -60,9 +60,30 @@ we define a simply polygon as both the ``input_mask`` and
 
    path = Path(xy)
    input_mask = path.contains_points(points)
+   input_mask = input_mask.reshape((ds.vf.shape[1], ds.vf.shape[0], 1)).swapaxes(0, 1)
    output_mask = input_mask
 
-|image0|
+We recommend a visual inspection of the mask to make sure it alignes
+with the data as you expect it to:
+
+::
+
+   from matplotlib.patches import Polygon          
+   from matplotlib.collections import PatchCollection
+
+   patch = Polygon(xy, True)  
+   p = PatchCollection([patch], alpha=0.4)
+
+   plt.figure(figsize=[5, 5])
+   ds.plot_l1norm(rotate=1, cmap="Greys")
+   plt.gca().add_collection(p)
+   plt.axis('off')
+   plt.savefig('images/mask.png')
+
+.. figure:: ../images/mask.png
+   :alt: plot of the mRNA density superimposed with the mask
+
+   plot of the mRNA density superimposed with the mask
 
 Local maxima search and normalization
 -------------------------------------
@@ -83,14 +104,12 @@ a total gene expression threshold of ``0.2``:
 
 ::
 
-   exp_thres = 0.027 # the per gene expression threshold
-   norm_thres = 0.2  # the total gene expression threshold
-
    analysis.find_localmax(
        search_size=3,
-       min_norm=norm_thres,
-       min_expression=exp_thres,
-       mask=input_mask)
+       min_norm=0.2, # the total gene expression threshold
+       min_expression=0.027, # the per gene expression threshold
+       mask=input_mask
+       )
 
 Visualization
 -------------
@@ -117,7 +136,10 @@ however in this example we use an input mask so it is not a problem.
    plt.axis('off')
    plt.show()
 
-|image1|
+.. figure:: ../images/maxima.png
+   :alt: plot found maxima superimposed with the mask
+
+   plot found maxima superimposed with the mask
 
 Normalization
 -------------
@@ -136,7 +158,3 @@ density and the local-maximum vectors.
 
 Now we are rady to continue with mapping the cell types in
 `guided <guided.md>`__ or `de novo mode <de_novo.md>`__.
-
-.. |image0| image:: ../images/mask.png
-.. |image1| image:: ../images/maxima.png
-
