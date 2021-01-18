@@ -34,6 +34,9 @@ from scipy.spatial.distance import cdist
 from sklearn.cluster import AgglomerativeClustering
 from PIL import Image
 from scipy.ndimage import zoom
+import pyarrow
+import time
+from packaging import version
 
 from .utils import corr, calc_ctmap, calc_corrmap, flood_fill, calc_kde
 
@@ -112,7 +115,7 @@ def run_sctransform(data, clip_range=None, verbose=True, debug_path=None, plot_m
             df.to_feather(ifn, version=1)
         else:
             df.to_feather(ifn)
-        rcmd = 'library(arrow); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}, return_gene_attr=TRUE, return_cell_attr=TRUE); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
+        rcmd = 'library(feather); library(sctransform); mat <- t(as.matrix(read_feather("{0}"))); colnames(mat) <- 1:ncol(mat); res <- vst(mat{1}, return_gene_attr=TRUE, return_cell_attr=TRUE); write_feather(as.data.frame(t(res$y)), "{2}"); write_feather(as.data.frame(res$model_pars_fit), "{3}");'.format(ifn, vst_opt_str, ofn, pfn)
         if plot_model_pars:
             plot_path = os.path.join(tmpdirname, 'model_pars.png')
             rcmd += 'png(file="%s", width=3600, height=1200, res=300); plot_model_pars(res, show_var=TRUE); dev.off();'%plot_path
