@@ -55,7 +55,7 @@ All following steps in ``python``:
        "zenodo/multiplexed_smFISH/raw_data/smFISH_MCT_CZI_Panel_0_spot_table.csv",
        usecols=['x', 'y', 'z', 'target'])
        
-       um_per_pixel = 0.1
+   um_per_pixel = 0.1
 
    df.x = (df.x - df.x.min()) * um_per_pixel + 10
    df.y = (df.y - df.y.min()) * um_per_pixel + 10
@@ -64,7 +64,8 @@ All following steps in ``python``:
    height = df.y.max() - df.y.min() + 10
 
    grouped = df.groupby('target').agg(list)
-   genes = list(grouped.index)coord_list = []
+   genes = list(grouped.index)
+   coord_list = []
    for target, coords in grouped.iterrows():
        coord_list.append(np.array(list(zip(*coords))))
 
@@ -96,13 +97,19 @@ Creating the *de novo* cell map
 ::
 
    analysis.cluster_vectors(
-       method="louvain", 
        min_cluster_size=0,
        pca_dims=22,
        resolution=0.15,
        metric='correlation')
        
-   analysis.filter_celltypemaps(min_norm=filter_method, filter_params=filter_params, min_r=0.6, output_mask=output_mask)
+   # post-filtering parameter for cell-type map
+   filter_method = "local"
+   filter_params = {
+       "block_size": 151,
+       "method": "mean",
+       "mode": "constant",
+       "offset": 0.2
+   }
 
    analysis.map_celltypes()
    analysis.filter_celltypemaps(min_norm=filter_method, filter_params=filter_params, min_r=0.6, fill_blobs=True, min_blob_area=50, output_mask=output_mask)
@@ -124,7 +131,8 @@ Creating the tissue domain map
    ds.plot_domains(rotate=1, cmap=cmap)
 
 .. figure:: ../images/domains.png
-   :alt: Visualisation of final domain map exhibitin clearly separated domains.
+   :alt: Visualisation of final domain map exhibitin clearly separated
+   domains.
 
    Visualisation of final domain map exhibitin clearly separated
    domains.

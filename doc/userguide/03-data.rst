@@ -18,9 +18,7 @@ First, download the data and unpack it:
 Load data into python
 ---------------------
 
-The archive contains an mRNA spot table in csv format. Each row
-describes one mRNA spot and the columns contain its coordinates and
-target gene. We load the required columns into a dataframe:
+Let’s start with loading our python packages:
 
 ::
 
@@ -29,12 +27,18 @@ target gene. We load the required columns into a dataframe:
    import matplotlib.pyplot as plt
    import ssam
 
+Now we can load the mRNA spot table. Each row describes one mRNA spot
+and the columns contain its coordinates and target gene. We load the
+required columns into a dataframe:
+
+::
+
    df = pd.read_csv(
        "zenodo/multiplexed_smFISH/raw_data/smFISH_MCT_CZI_Panel_0_spot_table.csv",
        usecols=['x', 'y', 'z', 'target'])
 
-If your dataset is organized differently, you have to reshape it before
-continuing with the next steps. ## Transform Data
+If your dataset is organized differently, you will have to reshape it
+before continuing with the next steps. ## Transform Data
 
 Because SSAM analysis is rooted in a cellular scale we transform the
 coordinates from a laboratory system into micrometers. Also we make them

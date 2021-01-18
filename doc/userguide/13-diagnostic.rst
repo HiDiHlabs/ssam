@@ -77,8 +77,8 @@ Sampled local maxima (panel 1) to no correspond to the classified pixels
 
 |image3|
 
-.. |image0| image:: https://github.com/eilslabs/ssam_example/blob/master/diagplots_multiplexed_smFISH/diagplot_centroid_2.png
-.. |image1| image:: https://github.com/eilslabs/ssam_example/blob/master/diagplots_multiplexed_smFISH/diagplot_centroid_5.png
-.. |image2| image:: https://github.com/eilslabs/ssam_example/blob/master/diagplots_multiplexed_smFISH/diagplot_centroid_30.png
-.. |image3| image:: https://github.com/eilslabs/ssam_example/blob/master/diagplots_multiplexed_smFISH/diagplot_centroid_8.png
+.. |image0| image:: ../images/diagplot_centroid_2.png
+.. |image1| image:: ../images/diagplot_centroid_5.png
+.. |image2| image:: ../images/diagplot_centroid_30.png
+.. |image3| image:: ../images/diagplot_centroid_8.png
 
