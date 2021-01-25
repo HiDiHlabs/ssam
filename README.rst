@@ -28,7 +28,7 @@ Install
 Documentation
 =============
 
-https://ssam.readthedocs.io/en/latest/
+https://ssam.readthedocs.io/
 
 Citations
 =========
