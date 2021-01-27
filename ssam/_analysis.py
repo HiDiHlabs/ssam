@@ -675,7 +675,7 @@ class SSAMAnalysis(object):
             vecs_normalized_dimreduced = get_normalized_vectors()
             if method == "dbscan":
                 cl = DBSCAN(**kwargs)
-            elif method == "hdbscan"
+            elif method == "hdbscan":
                 cl = hdbscan.HDBSCAN(**kwargs)
             elif method == "optics":
                 cl = OPTICS(**kwargs)
