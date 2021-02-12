@@ -41,5 +41,6 @@ setuptools.setup(
         "sparse",
         "scikit-image",
         "pyarrow",
+        "packaging",
     ]
 )
