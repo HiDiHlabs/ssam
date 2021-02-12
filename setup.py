@@ -14,16 +14,15 @@ with io.open("README.rst", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="ssam",
-    version="1.0.1",
+    version="1.0.1-2",
     author="Jeongbin Park",
-    author_email="jeongbin.park@charite.de",
+    author_email="j.park@dkfz-heidelberg.de",
     description="SSAM",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/eilslabs/ssam",
+    url="https://github.com/HiDiHlabs/ssam",
     packages=setuptools.find_packages(),
     classifiers=[
-        "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
         "Operating System :: POSIX",
