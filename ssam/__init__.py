@@ -8,7 +8,7 @@ import os
 sns.set()
 sns.set_style("whitegrid", {'axes.grid' : False})
 from functools import reduce
-from sklearn.neighbors.kde import KernelDensity
+from sklearn.neighbors import KernelDensity
 from sklearn import preprocessing
 import scipy
 from scipy import ndimage
