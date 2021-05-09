@@ -2,7 +2,7 @@ Experimental features
 =====================
 
 We will endevour to improve the functionality of SSAM by implementing
-novel features.
+novel features. So far, these experimental features only works with the ``develop`` branch of SSAM.
 
 The current novel features supported by SSAM include:
 
