@@ -1284,9 +1284,12 @@ class SSAMAnalysis(object):
 
         self.dataset.spatial_relationships = preprocessing.normalize(sparel, axis=1, norm='l1')
 
-    def run_watershed(self):
+    def run_watershed(self, mask_markers):
         """
-        Run watershed segmentation based on the cell-type map (experimental).
+        Run watershed segmentation based on the cell-type map with a mask of marker image (experimental).
+        
+        :param exclude: Indices of the domains which will be excluded.
+        :type exclude: list(int)
         """
         import cv2
 
@@ -1302,8 +1305,8 @@ class SSAMAnalysis(object):
             m = np.logical_and(self.dataset.celltype_maps == list(denovo_labels_final).index(cl), self.dataset.max_correlations > 0.6, vn > self.dataset.norm_threshold)
             
             # https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_watershed/py_watershed.html
-            thresh = np.zeros_like(dapi_thresh_im, dtype=np.uint8)
-            thresh[m] = dapi_thresh_im[m]
+            thresh = np.zeros_like(mask_markers, dtype=np.uint8)
+            thresh[m] = mask_markers[m]
             thresh = thresh[..., 0]
 
             # noise removal
