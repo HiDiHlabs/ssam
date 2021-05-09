@@ -25,7 +25,7 @@ The segmentation of the cell type map can be performed by:
    # Run watershed segmentation of cell-type maps with DAPI as markers
    # After running below, the segmentation data will be available as:
    #  - Segmentations: ds.watershed_segmentations
-   #  - Cell-type map: ds.waterhsed_celltype_map
+   #  - Cell-type map: ds.watershed_celltype_map
    analysis.run_watershed(dapi_thresh_im)
 
 Below we demonstrate the application of the segmentation on the *de
