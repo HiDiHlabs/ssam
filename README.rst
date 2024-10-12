@@ -1,4 +1,5 @@
-# Notice
+Notice
+======
 
 This repository is no longer maintained. Further development of SSAM will be continued in the https://github.com/pnucolab/ssam repository.
 
