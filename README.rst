@@ -1,3 +1,6 @@
+# Notice
+
+This repository is no longer maintained. Further development of SSAM will be continued in the https://github.com/pnucolab/ssam repository.
 
 SSAM (Spot-based Spatial cell-type Analysis by Multidimensional mRNA density estimation)
 ========================================================================================
